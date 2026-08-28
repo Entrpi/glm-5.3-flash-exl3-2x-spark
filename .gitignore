@@ -1,0 +1,8 @@
+.env
+*.safetensors
+*.bin
+*.gguf
+local/
+results/
+__pycache__/
+*.pyc
