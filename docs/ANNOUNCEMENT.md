@@ -52,8 +52,10 @@ commands in "Reproducing").
 
 **Known limitations:** local-both weights topology carries a documented
 head swap-wedge risk during load (`--nfs` is the validated fallback); video
-inputs untested; 900k single-request context not attempted (see the MiaAI
-recipe; this recipe's default is 524k banks × 2.74 concurrency); draft
+inputs untested; max-model-len validated to 524,288 (the fp8 pool —
+1,435,070 tokens, the largest published on this hardware at this dtype —
+covers a single request up to native 1M, but longer declarations are
+unvalidated here); draft
 TP=1 knob is plumbed but inert on this fork; the MXFP8-quantized DFlash2
 draft checkpoint does not load **in this image build** (the loader fix is
 on the branch @ `88ca596c6` and ships in the next image — until then use

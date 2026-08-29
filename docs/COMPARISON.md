@@ -63,9 +63,11 @@ structured post-template-fix); the TTFT gap favors this stack consistently.
 
 ## What each stack is for
 
-- **Choose the MiaAI recipe** for maximum single-request context: 900k
-  tokens on two Sparks still exceeds this recipe's 524k default (their
-  packed-fp8 KV is mandatory; one request fills the pool).
+- **KV capacity at fp8, same hardware — the metric that matters:** this
+  recipe 1,435,070 tokens vs MiaAI 982,612 (+46%). Max-model-len is a
+  config knob bounded by the pool, not a capability: their 900k
+  declaration leaves 1.09 requests in flight; this recipe's 524k default
+  is a deliberate 2.74-bank operating point on a larger pool.
 - **Choose this recipe** for production long-context serving: 524k banks
   with 2.74× concurrency (estonia 9/10, lavd parity, n≥50/n=100 task
   gates), ~8× faster long-prompt prefill (MNBT 8192 survives 133k

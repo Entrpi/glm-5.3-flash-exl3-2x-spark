@@ -175,13 +175,15 @@ as [scripts/bench_decode_miaai.py](scripts/bench_decode_miaai.py):
 | TTFT (short prompt) | **0.43–0.47 s** | ~0.72 s |
 
 > A best-on-each-stack comparison, not a single-variable controlled run —
-> different vLLM lineages, KV formats, and context ceilings. Their recipe
-> still holds the max-context edge (900k, one request filling a
-> 982,612-token packed-fp8 pool); this stack now serves 524k banks with
-> 2.74× concurrency (1,435,070-token pool), ~8× larger prefill chunks, and
-> the deeper eval story. Both projects independently converged on the same
-> three hard fixes (drafter KV grouping, mHC aux capture, non-causal draft
-> attention) — see [docs/COMPARISON.md](docs/COMPARISON.md).
+> different vLLM lineages and KV formats. The capacity metric that matters
+> is the KV pool at a given dtype, and at fp8 on the same hardware this
+> stack holds **1,435,070 tokens vs their 982,612** (+46%); max-model-len
+> is a knob bounded by that pool (their 900k config = 1.09 requests in
+> flight; this stack's 524k default is a choice that keeps 2.74). Add ~8×
+> larger prefill chunks and the deeper eval story. Both projects
+> independently converged on the same three hard fixes (drafter KV
+> grouping, mHC aux capture, non-causal draft attention) — see
+> [docs/COMPARISON.md](docs/COMPARISON.md).
 
 ### Quality
 
