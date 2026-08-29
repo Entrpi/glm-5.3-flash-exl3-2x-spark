@@ -73,7 +73,10 @@ BLOCK_SIZE="${BLOCK_SIZE:-2304}"         # KV block; with fp8 KV vLLM auto-bumps
                                          # to 4608"). 2304 is the bf16 parity
                                          # point; must satisfy
                                          # block %% (index_kpool*64).
-KV_DTYPE="${KV_DTYPE:-fp8_e4m3}"         # fp8_e4m3 (default 2026-08-29):
+KV_DTYPE="${KV_DTYPE-fp8_e4m3}"          # fp8_e4m3 (default 2026-08-29):
+                                         # NOTE ${VAR-} not ${VAR:-}: an
+                                         # explicitly EMPTY KV_DTYPE= selects
+                                         # bf16; only unset gets the default.
                                          # 1,435,070-token pool @524k = 2.74
                                          # full banks; estonia 9/10, lavd
                                          # parity, math_500 88.0% pooled n=250
