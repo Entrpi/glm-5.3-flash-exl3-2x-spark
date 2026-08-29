@@ -8,8 +8,8 @@ local-inference-lab, eugr, or NVIDIA.
 | | |
 |---|---|
 | Tag | `ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v1-dflash2` |
-| Digest | `TODO-FILLED-AT-PUSH` |
-| Base image | `nvidia/cuda:13.0.2-devel-ubuntu24.04` (aarch64), digest `TODO-FILLED-AT-PUSH` |
+| Digest | `sha256:284142c5833cbfd540ad42bb8f32cb340451db05a3b84029eaebae54579e9135` (`:v1-dflash2` = `:latest`) |
+| Base image | `nvidia/cuda:13.0.2-devel-ubuntu24.04` (aarch64), manifest-list digest `sha256:5dc1bca23d05bd37b011be68ec470c03b403a5da07ec3a86e41af9470e9d0cc6` |
 | Arch | linux/arm64, CUDA kernels compiled for `12.1a` (GB10 / sm_121) |
 
 ## How it was built
