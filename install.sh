@@ -272,6 +272,10 @@ install_scripts
 start_server
 
 echo
+if [ "$NO_START" = 1 ]; then
+  ok "Prepared (not launched)."
+  exit 0
+fi
 ok "Done. API: http://localhost:$PORT/v1  (model id: glm-5.3-flash)"
 echo "  logs:   docker logs -f vllm_glm53"
 echo "  stop:   docker rm -f vllm_glm53   (head)  |  ssh $WORKER docker rm -f vllm_glm53"
