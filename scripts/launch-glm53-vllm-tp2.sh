@@ -5,6 +5,10 @@ set -euo pipefail
 #
 # Run the WORKER first (rank 1, ~25 s to join), then the HEAD (rank 0: API
 # server + engine). The API serves on the head: http://<head-lan-ip>:8000.
+# RELAUNCHING A LIVE CLUSTER: remove the head container BEFORE launching the
+# new worker (a fresh worker rendezvouses with the old head's TCP store and
+# dies of connection-reset when that head goes away). Then keep the worker->
+# head gap under torch's 600 s rendezvous timeout.
 # Community-derivative image: ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark
 # (vLLM branch glm53-on-infernal + DFlash2 + ring draft-KV + EXL3 fused MoE
 # baked; see docs/BUILD.md in the setup repo for full provenance).

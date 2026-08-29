@@ -239,6 +239,10 @@ install_scripts() {
 # ---------- §5 launch --------------------------------------------------------
 start_server() {
   [ "$NO_START" = 1 ] && { log "--no-start: skipping launch. Worker: ./launch-glm53-vllm-tp2.sh 1, then head: ./launch-glm53-vllm-tp2.sh 0"; return; }
+  # Tear down a live head FIRST: a fresh worker otherwise rendezvouses with
+  # the OLD head's TCP store and dies of connection-reset the moment that
+  # head is replaced (leaving the new head waiting on a dead worker).
+  docker rm -f vllm_glm53 >/dev/null 2>&1 || true
   log "launching worker (rank 1)"
   WSSH "\$HOME/launch-glm53-vllm-tp2.sh 1" || die "worker launch failed"
   sleep 30
