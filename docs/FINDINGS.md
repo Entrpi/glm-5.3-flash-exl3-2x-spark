@@ -215,11 +215,67 @@ wall hit. Escapes: a sm121-aware multi-pass top-k (upstream-PR candidate)
 or the b12x selector lane. Until then 524,288 is the validated ceiling,
 and it is a *kernel* ceiling, not a capacity one.
 
+## 12. The GLM_NEXT b12x lane (2026-08-30)
+
+Upstream b12x defines `ModelType.GLM_NEXT`: GLM-5.3-Flash's absorbed
+NoPE MLA as a first-class contract — full 512-wide query, packed
+**528 B/token** cache record (512 E4M3 latent + 4 inline fp32 group-128
+scales, no RoPE payload), FP8 compute, explicit model identity on every
+kernel call (512 is shape-ambiguous with DSV4). We back-ported the two
+upstream kernel commits onto the shipped b12x
+([Entrpi/sparkinfer-glmrt](https://github.com/Entrpi/sparkinfer-glmrt)
+branch `glm-next-backport`; two one-line fork fixes: smem_mg GLM routing
+and the prefill_mg contiguous early-return; 26/26 GLM_NEXT + 234/234
+serving-lane kernel tests on GB10) and grafted the lane into this fork's
+`B12X_MLA_SPARSE` backend (fork @ `5c9e2bfd2`): the kpool indexer stays
+byte-identical to the fp8_e4m3 lane, its logical top-k indices are
+converted to physical slots exactly as the FlashInfer lane does, and the
+selector buffer is 2112 wide (the GLM_NEXT prefill contract enumerates
+widths — 128-rounding to 2176 is rejected).
+
+Serve it with `ATTN_BACKEND=B12X_MLA_SPARSE KV_DTYPE=fp8_ds_mla
+KV_SKIP_LAYERS=sliding_window`. Full gauntlet vs the fp8_e4m3 lane at
+identical settings: math_500 **91/100** (vs 87), lavd n=30
+**EXACT 15/NEAR 14/FAIL 1** (vs 5/23/2), estonia **10/10** (vs 9/10),
+gpqa 70% (vs 72% — one question), prose **31.2 tok/s** (+8%), TTFT
+**0.38–0.41 s** (−15%), 133k prefill 89.4 s (vs ~95), accept 2.32–2.56
+(vs 2.26). Pool: 1,324,163 with the drafter (−7.7%: the draft ring-KV
+must run bf16 under `--kv-cache-dtype-skip-layers`, where the fp8_e4m3
+lane quantizes it; drafterless the lane's pool is 1,858,451, +29.5%).
+The quality gains are consistent with group-128 per-token scaling beating
+one per-layer scale. Three gotchas earned the hard way:
+
+- **Drafterless + 524k declared fails on EVERY lane**: with ≤4 decode
+  rows, `persistent_topk` caps its smem to a small-batch tier and the
+  524k row stride then needs 62 CTAs against a 48-CTA budget. The
+  drafter's B×8 verify rows land in the 48 KB tier (45 CTAs) — which is
+  why production never saw it. Cap drafterless runs at ~358k, or fix the
+  kernel heuristic (retry with full smem before failing — upstream-PR
+  candidate).
+- **`--kv-cache-dtype-skip-layers` list parsing**: a comma-joined index
+  string arrives as ONE unmatched element; use the attention-type name
+  (`sliding_window` — the DFlash2 draft ring is sliding-window-typed).
+- **Acceptance is content-dependent**: an ad-hoc creative-prose probe
+  read 1.31/7 accept (18.4 tok/s) on a lane that benches 2.56/7
+  (31.2 tok/s) on the standardized c1 phases. Never judge decode from a
+  single prompt.
+
+The 1M wall (§11) is unchanged — it lives in the indexer's top-k, which
+this lane deliberately keeps. The GLM_NEXT lane is also the prerequisite
+for NVFP4 KV records (~288 B/token), the next capacity step.
+
 ## Production recommendation
 
-Serve the defaults: 524k context, fp8 KV, DFlash2 k=7, CUDA graphs,
+Serve the GLM_NEXT lane (ratified default 2026-08-30):
+`ATTN_BACKEND=B12X_MLA_SPARSE KV_DTYPE=fp8_ds_mla
+KV_SKIP_LAYERS=sliding_window`, 524k context, DFlash2 k=7, CUDA graphs,
 MNBT 8192, KV budget 12.4 GB, gmu 0.85, `SKIP_MM_PROFILING=1`, thinking
-off at the serving layer. For math-heavy workloads use the short-context
-profile (`MAX_LEN=131072 KV_DTYPE= SKIP_MM_PROFILING=0 MAX_SEQS=6` — bf16,
-94% math_500). `MTP=4` only as an emergency fallback. Do not raise memory
-knobs without re-running the floor methodology.
+off at the serving layer. On the `v1-dflash2` image this requires the
+hotfix overlays (fork @ `5c9e2bfd2` + b12x `glm-next-backport`); the
+next image bakes it. The fp8_e4m3 lane (no overlay needed) remains fully
+supported: drop the three env knobs. For math-heavy workloads the
+GLM_NEXT default now leads (91/100); the short-context bf16 profile
+(`MAX_LEN=131072 KV_DTYPE= ATTN_BACKEND= SKIP_MM_PROFILING=0
+MAX_SEQS=6`) remains for minimal-quantization preference. `MTP=4` only
+as an emergency fallback. Do not raise memory knobs without re-running
+the floor methodology.

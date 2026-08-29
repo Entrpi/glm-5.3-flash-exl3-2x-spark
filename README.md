@@ -78,9 +78,10 @@ KV budget:
 
 | Configuration | KV pool (tokens) | Concurrency @max-len | Notes |
 |---|---:|---:|---|
-| **Default: 524k, DFlash2 + `fp8_e4m3` KV** | **1,435,070** | 2.74× | long-context production config; vLLM auto-bumps the KV block to 4608 for KDA/attention page parity |
+| **GLM_NEXT lane: 524k, DFlash2 + `fp8_ds_mla` KV** | **1,324,163** | 2.53× | ratified default 2026-08-30 (b12x 528 B/token packed records); on the `v1-dflash2` image it needs the hotfix overlays — becomes the baked default with the next image. Drafterless pool: 1,858,451 (the deficit vs the row below is entirely the draft ring-KV running bf16 under the skip mechanism) |
+| 524k, DFlash2 + `fp8_e4m3` KV | 1,435,070 | 2.74× | the 2026-08-29 default, fully supported on the shipped image; vLLM auto-bumps the KV block to 4608 for KDA/attention page parity |
 | 358k, DFlash2 + fp8 | 1,275,306 | 3.56× | `MAX_LEN=358400` — more concurrency headroom |
-| 131k short-context mode, bf16 KV | 520,470 | 3.97× | `MAX_LEN=131072 KV_DTYPE= SKIP_MM_PROFILING=0 MAX_SEQS=6` — the pre-2026-08-29 default; math parity with fp8 (86 vs 87 n=100) |
+| 131k short-context mode, bf16 KV | 520,470 | 3.97× | `MAX_LEN=131072 KV_DTYPE= ATTN_BACKEND= SKIP_MM_PROFILING=0 MAX_SEQS=6` — the pre-2026-08-29 default; math parity with fp8 (86 vs 87 n=100) |
 | 131k, fp8 (2304 block) | 769,817 | 5.87× | historical option gate |
 | 131k, no speculation, bf16 | 917,504 | 7.00× | `SPEC=none` |
 
@@ -123,10 +124,11 @@ relaunches (`~/glm53-vllm-cache/jit`).
 
 | Profile | How | When |
 |---|---|---|
-| **Default** | (nothing) | 524k context, DFlash2 k=7 + fp8 KV + CUDA graphs — 2.74 concurrent full banks |
-| Short-context bf16 | `MAX_LEN=131072 KV_DTYPE= SKIP_MM_PROFILING=0 MAX_SEQS=6` on both launches | the pre-2026-08-29 production config; 131k context |
+| **GLM_NEXT b12x lane** | `ATTN_BACKEND=B12X_MLA_SPARSE KV_DTYPE=fp8_ds_mla KV_SKIP_LAYERS=sliding_window` on both launches | ratified default 2026-08-30 — beats the fp8_e4m3 lane on every quality and speed gate (see FINDINGS §12); on the `v1-dflash2` image it requires the hotfix overlays (fork @ `5c9e2bfd2` + b12x `glm-next-backport`) and becomes the baked default with the next image |
+| Shipped-image default | (nothing) | 524k context, DFlash2 k=7 + fp8_e4m3 KV + CUDA graphs — 2.74 concurrent full banks, fully baked into `v1-dflash2` |
+| Short-context bf16 | `MAX_LEN=131072 KV_DTYPE= ATTN_BACKEND= SKIP_MM_PROFILING=0 MAX_SEQS=6` on both launches | the pre-2026-08-29 production config; 131k context |
 | MTP fallback | `MTP=4` on both launches | if the drafter ever misbehaves; ~21% slower |
-| No speculation | `SPEC=none` | maximum KV pool, debugging |
+| No speculation | `SPEC=none` | maximum KV pool, debugging — but NOT at 524k declared: with ≤4 decode rows the `persistent_topk` small-batch heuristic oversubscribes sm121 (FINDINGS §12); cap `MAX_LEN` ≤ ~358k for drafterless runs |
 
 Thinking is **off by default** at the serving layer
 (`--default-chat-template-kwargs '{"enable_thinking": false}'`); enable per
@@ -198,14 +200,20 @@ as [scripts/bench_decode_miaai.py](scripts/bench_decode_miaai.py):
 
 ### Quality
 
-| Gate | Result |
-|---|---|
-| math_500 n=100, shipping default (fp8@524k) | **87%** — parity with bf16 (86/100 same-day A/B) |
-| gpqa_diamond n=50, shipping default | **72%** (36/50, robust grading) |
-| estonia (133,186-token retrieval, n=10, high reasoning) | **9/10** — community band |
-| lavd ledger audit (n=30, high reasoning) | EXACT 5 / NEAR 23 / FAIL 2 — parity with bf16 |
-| Speculative equivalence | lossless up to argmax tie-flips (rescoring-control methodology, [tools/dflash_equiv.py](tools/dflash_equiv.py)) |
-| Vision | plain image + image-with-tool-call verified at temp 0; drafting shows **no acceptance penalty** on vision requests |
+| Gate | fp8_e4m3 lane (shipped image) | GLM_NEXT b12x lane (ratified default) |
+|---|---|---|
+| math_500 n=100 | 87% (bf16 same-day A/B: 86) | **91%** |
+| gpqa_diamond n=50 (robust) | 72% (36/50) | 70% (35/50 — one question, noise) |
+| estonia (133,186-token retrieval, n=10, high) | 9/10 | **10/10, 0 errors** |
+| lavd ledger audit (n=30, high, EXACT/NEAR/FAIL) | 5/23/2 | **15/14/1** |
+| c1 prose decode / TTFT | 28.9 tok/s / 0.44–0.49 s | **31.2 tok/s / 0.38–0.41 s** |
+| structured decode | 74.6 tok/s | 71.5 (top run 74.5 — noise) |
+| Speculative equivalence | lossless up to argmax tie-flips ([tools/dflash_equiv.py](tools/dflash_equiv.py)) | accept 2.32–2.56/7 on c1 (vs 2.26) |
+| Tool + vision smokes | verified at temp 0 | verified at temp 0 |
+
+The GLM_NEXT lane's lavd and math gains are consistent with its packed
+528 B/token records carrying **group-128 inline fp32 scales** — finer
+per-token quantization than fp8_e4m3's single per-layer scale.
 
 ## Under the hood
 
