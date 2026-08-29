@@ -173,6 +173,15 @@ if [[ -d "$FI_HOTFIX_DIR" ]]; then
     EXTRA_VOLS+=(-v "$f:/usr/local/lib/python3.12/dist-packages/flashinfer/$rel:ro")
   done < <(find "$FI_HOTFIX_DIR" -type f -print0)
 fi
+# b12x is bumped as a whole package (kernel contracts span many files), so
+# this hook binds the directory, not per-file: put a complete b12x/ package
+# tree at $HOME/glm53-hotfix-b12x (the package dir itself, containing
+# __init__.py). Same rule as the others: REMOVE the dir once folded into an
+# image.
+B12X_HOTFIX_DIR="$HOME/glm53-hotfix-b12x"
+if [[ -d "$B12X_HOTFIX_DIR" ]]; then
+  EXTRA_VOLS+=(-v "$B12X_HOTFIX_DIR:/usr/local/lib/python3.12/dist-packages/b12x:ro")
+fi
 
 # Persist JIT compile caches (Triton, FlashInfer, b12x CuTeDSL, vLLM
 # torch.compile) across container recreates — hash-keyed, so stale entries
