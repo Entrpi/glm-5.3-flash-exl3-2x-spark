@@ -53,10 +53,13 @@ tool-call smoke at temp 0; c1 ~29 tok/s prose / 74.6 structured, TTFT
 
 **Known limitations:** local-both weights topology carries a documented
 head swap-wedge risk during load (`--nfs` is the validated fallback); video
-inputs untested; max-model-len validated to 524,288 (the fp8 pool —
-1,435,070 tokens, the largest published on this hardware at this dtype —
-covers a single request up to native 1M, but longer declarations are
-unvalidated here); draft
+inputs untested; max-model-len ceiling on this lane is just above the
+524,288 default: a native-1M declaration fails at boot on GB10
+(`persistent_topk` needs 90 CTAs vs 48 SMs and the FilteredTopK fallback
+wants ≥128 KB smem vs sm121's ~99 KB) — a kernel fix or the b12x
+selector lane is required for longer declarations; the fp8 pool itself
+(1,435,070 tokens at 524k, the largest published on this hardware at
+this dtype) is not the limiter; draft
 TP=1 knob is plumbed but inert on this fork; the MXFP8-quantized DFlash2
 draft checkpoint does not load **in this image build** (the loader fix is
 on the branch @ `88ca596c6` and ships in the next image — until then use

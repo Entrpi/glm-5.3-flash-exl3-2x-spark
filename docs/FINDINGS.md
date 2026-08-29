@@ -201,6 +201,20 @@ Long-context validation used
 [local-inference-lab/llm-inference-bench](https://github.com/local-inference-lab/llm-inference-bench)
 (`--test-profile estonia` / `lavd`, `--reasoning-effort high`).
 
+## 11. The 1M-declaration wall (negative result, 2026-08-29)
+
+A native-1M `--max-model-len` boot fails on this lane at warmup:
+`persistent_topk would oversubscribe ... FilteredTopK fallback requires
+>=128KB smem per block (have 101376). total_ctas=90 > num_sms*occupancy=48
+(TopK=512)`. The sparse-indexer decode top-k sizes its persistent grid
+from the declared max context; GB10's 48 SMs and ~99 KB/SM shared memory
+cap the launchable declaration at just above the 524,288 default (~45
+CTAs). Not an MNBT/prefill issue and not memory-pool-related — the pool
+at a 1M declaration actually grew to 1,658,303 tokens before the kernel
+wall hit. Escapes: a sm121-aware multi-pass top-k (upstream-PR candidate)
+or the b12x selector lane. Until then 524,288 is the validated ceiling,
+and it is a *kernel* ceiling, not a capacity one.
+
 ## Production recommendation
 
 Serve the defaults: 524k context, fp8 KV, DFlash2 k=7, CUDA graphs,
