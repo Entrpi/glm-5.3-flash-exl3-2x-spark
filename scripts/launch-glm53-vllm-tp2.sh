@@ -92,6 +92,10 @@ ip -o addr show | grep -q "$HOST_IP/" || {
 
 EXTRA_VOLS=()
 EXTRA_ENVS=()
+# Optional kernel-selection override (A/B tests without editing this script),
+# e.g. VLLM_DISABLED_KERNELS=FlashInferCutlassMxfp8LinearKernel to step the
+# MXFP8 draft GEMM ladder down to Marlin W8A16.
+[[ -n "${VLLM_DISABLED_KERNELS:-}" ]] && EXTRA_ENVS+=(-e "VLLM_DISABLED_KERNELS=$VLLM_DISABLED_KERNELS")
 if [[ "$WEIGHTS_MODE" == "local" || "$NODE_RANK" == "1" ]]; then
   test -f "$MODEL_HOST_PATH/config.json" || {
     echo "EXL3 weights not found at $MODEL_HOST_PATH (run install.sh, or set MODEL_HOST_PATH)" >&2
