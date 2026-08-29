@@ -147,6 +147,11 @@ elif [[ "$SPEC" == "dflash" ]]; then
 fi
 KV_ARGS=()
 [[ -n "$KV_DTYPE" ]] && KV_ARGS+=(--kv-cache-dtype "$KV_DTYPE")
+# Explicit attention backend (e.g. ATTN_BACKEND=B12X_MLA_SPARSE for the
+# GLM_NEXT 528 B/token lane, which also needs KV_DTYPE=fp8_ds_mla). Empty =
+# the fork's auto-selection (FLASHINFER_MLA_SPARSE_SM90 on these boxes).
+ATTN_BACKEND="${ATTN_BACKEND:-}"
+[[ -n "$ATTN_BACKEND" ]] && KV_ARGS+=(--attention-backend "$ATTN_BACKEND")
 [[ -n "$KV_CACHE_MEMORY" ]] && KV_ARGS+=(--kv-cache-memory "$KV_CACHE_MEMORY")
 EAGER_ARGS=()
 [[ "$EAGER" != "0" ]] && EAGER_ARGS=(--enforce-eager)
@@ -245,4 +250,4 @@ docker run --gpus all -d \
     --master-addr "$HEAD_RAIL_IP" --master-port "$MPORT" \
     $HEADLESS
 
-echo "launched $NAME rank=$NODE_RANK host=$HOST_IP image=$IMAGE weights=$WEIGHTS_MODE kv=${KV_CACHE_MEMORY:-auto}${KV_DTYPE:+/$KV_DTYPE} spec=${SPEC}${MTP:+ mtp=$MTP} mnbt=${MNBT:-default}"
+echo "launched $NAME rank=$NODE_RANK host=$HOST_IP image=$IMAGE weights=$WEIGHTS_MODE kv=${KV_CACHE_MEMORY:-auto}${KV_DTYPE:+/$KV_DTYPE}${ATTN_BACKEND:+ attn=$ATTN_BACKEND} spec=${SPEC}${MTP:+ mtp=$MTP} mnbt=${MNBT:-default}"
