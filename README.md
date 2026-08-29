@@ -208,6 +208,7 @@ as [scripts/bench_decode_miaai.py](scripts/bench_decode_miaai.py):
 | lavd ledger audit (n=30, high, EXACT/NEAR/FAIL) | 5/23/2 | **15/14/1** |
 | c1 prose decode / TTFT | 28.9 tok/s / 0.44–0.49 s | **31.2 tok/s / 0.38–0.41 s** |
 | structured decode | 74.6 tok/s | 71.5 (top run 74.5 — noise) |
+| deep prefill (cold, MNBT 8192) | ~1,400 tok/s @133k | **1,490 @133k; 1,277 @499k full bank (390.8 s, needle-exact)** |
 | Speculative equivalence | lossless up to argmax tie-flips ([tools/dflash_equiv.py](tools/dflash_equiv.py)) | accept 2.32–2.56/7 on c1 (vs 2.26) |
 | Tool + vision smokes | verified at temp 0 | verified at temp 0 |
 

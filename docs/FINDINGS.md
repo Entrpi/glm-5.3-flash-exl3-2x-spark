@@ -260,6 +260,17 @@ one per-layer scale. Three gotchas earned the hard way:
   (31.2 tok/s) on the standardized c1 phases. Never judge decode from a
   single prompt.
 
+Prefill scales gracefully with depth on this lane (cold, MNBT 8192,
+drafter on): 133,186 tokens in 89.4 s (1,490 tok/s) and a **full-bank
+499,245 tokens in 390.8 s (1,277 tok/s), needle-exact at that depth** —
+a −14% rate falloff from 133k to 499k (indexer scoring and selection
+grow with context; no cliff). Budget ~6.5 minutes for a full 500k bank.
+Minimum MemAvailable during the full-bank prefill: **3.2 GiB** on the
+memory-binding box — tighter than the shipped default's 5.25 GiB floor
+(measured at a 112k prefill) but above the 2.26 GiB level §10 rejected;
+the full-bank prefill is the floor-binding operation on this lane, and
+the strict saturation-plus-full-bank floor methodology is still to run.
+
 The 1M wall (§11) is unchanged — it lives in the indexer's top-k, which
 this lane deliberately keeps. The GLM_NEXT lane is also the prerequisite
 for NVFP4 KV records (~288 B/token), the next capacity step.
