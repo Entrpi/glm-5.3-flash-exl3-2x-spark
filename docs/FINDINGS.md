@@ -275,6 +275,51 @@ The 1M wall (§11) is unchanged — it lives in the indexer's top-k, which
 this lane deliberately keeps. The GLM_NEXT lane is also the prerequisite
 for NVFP4 KV records (~288 B/token), the next capacity step.
 
+## 13. NVFP4 KV and native 1M (2026-08-30)
+
+Two additions landed together, both riding the GLM_NEXT lane (§12).
+
+**NVFP4 KV (`KV_DTYPE=nvfp4_ds_mla VLLM_NVFP4_MLA_DYNAMIC_SCALE=1`).**
+The kernel backport gained a rope-less `(GLM_NEXT, NVFP4_E4M3)` cache
+contract: **304 B/token** — 256 B packed E2M1 latent + 32 B E4M3
+group-16 scales + one fp32 *per-token* second-level scale (the strict
+[0, 288) prefix of the GLM_NSA NVFP4 record, so the latent PTX is
+reused unchanged). The dynamic per-token scale needs **no calibration
+file** and avoids the shallow-token E4M3-subnormal defect that static
+per-layer calibration papers over; static mode is deliberately not
+wired (the engine fails closed without the env). Full gauntlet at 524k
+vs the fp8_ds_mla default: math_500 **88**/100 (vs 91), gpqa **72%**
+(vs 70), estonia **10/10**, lavd **EXACT 10/NEAR 17/FAIL 3**
+(vs 15/14/1), prose 30.7 / structured 73.6 tok/s (parity), 133k prefill
+95.9 s. **Pool: 1,702,584 tokens = 3.25 × 524k banks (+28.6%).**
+Quality sits between the two fp8 lanes — below fp8_ds_mla's
+best-in-class lavd, well above fp8_e4m3's.
+
+**Native 1M serves.** The §11 wall was a *launch heuristic*, not
+capacity: with ≤8 decode rows `persistent_topk` caps its smem tier and
+a 1M row stride needs 90 CTAs against GB10's 48 — so any solo-decoding
+request died, at 524k drafterless and at 1M always. The fix retries the
+launch computation at the full ~99 KB smem (43 CTAs at 1M) before
+failing; on the `v1-dflash2` image it ships as a standalone
+`topk_fix.so` (built in-container from `tools/`-adjacent sources)
+loaded via `GLM53_TOPK_FIX_SO=/cache/topk_fix.so`; the next image bakes
+the fix into `_C`. First native-1M results on this hardware
+(`MAX_LEN=1048576` + the NVFP4 lane):
+
+- **Pool 2,144,814 tokens = 2.05 concurrent native-1M banks.**
+- Cold 1,029,486-token prefill: **907.8 s (1,134 tok/s)**, needle at
+  ~875k depth retrieved EXACT. Depth curve 1,389 tok/s @133k → 1,134
+  @1.03M — a gentle −18%, no cliff.
+- Decode with ~1.03M resident context: **29.1 tok/s** (empty-context
+  baseline 30.7 — flat); warm-prefix follow-up TTFT 19.6 s.
+- estonia 10/10; math_500 n=100 **86**/100 (band 86–88 — no
+  declaration or topk-fix regression).
+- **Floor warning: head MemAvailable bottomed at 0.80 GiB during the
+  1M cold prefill** (worker 3.59 GiB) — under the 2.26 GiB line §10
+  rejected. Run the 1M profile with `MNBT=4096` for activation
+  headroom, or drop the KV budget; 12.4e9 + MNBT 8192 survived but
+  with no margin.
+
 ## Production recommendation
 
 Serve the GLM_NEXT lane (ratified default 2026-08-30):
@@ -290,3 +335,12 @@ GLM_NEXT default now leads (91/100); the short-context bf16 profile
 MAX_SEQS=6`) remains for minimal-quantization preference. `MTP=4` only
 as an emergency fallback. Do not raise memory knobs without re-running
 the floor methodology.
+
+Two opt-in profiles extend the default (§13): **NVFP4 KV**
+(`KV_DTYPE=nvfp4_ds_mla VLLM_NVFP4_MLA_DYNAMIC_SCALE=1`) trades a
+little quality headroom (math 88 vs 91, lavd 10 vs 15 EXACT) for +28.6%
+pool (3.25 × 524k banks); **native 1M** (`MAX_LEN=1048576` on the NVFP4
+lane + `GLM53_TOPK_FIX_SO=/cache/topk_fix.so` on the v1 image) serves
+two concurrent full-length 1M banks — budget ~15 min per cold 1M
+prefill and prefer `MNBT=4096` (head-box floor). fp8_ds_mla stays the
+default because it wins the quality gates outright.

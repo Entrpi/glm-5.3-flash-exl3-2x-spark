@@ -20,8 +20,12 @@ banks; 1,858,451 drafterless), 133k-token prefill in **89 s** and a
 math_500 **91%** (n=100), gpqa_diamond 70%, estonia 133k retrieval
 **10/10**, lavd ledger audit **15/30 EXACT** (3× the fp8_e4m3 lane),
 vision verified end-to-end including tool calls. Every claim is cashed
-out in a table below. On the shipped `v1-dflash2` image this lane needs
-the hotfix overlays (see Profiles); it becomes the baked default with
+out in a table below. Opt-in profiles go further: **NVFP4 KV** lifts the
+pool to **1,702,584 tokens (3.25 banks)**, and the **native-1M profile
+serves 1,048,576-token context with 2.05 concurrent full banks** —
+needle-exact at 875k depth, decode flat at full depth, ~15 min per cold
+1M prefill (FINDINGS §13). On the shipped `v1-dflash2` image these lanes
+need the hotfix overlays (see Profiles); they become baked options with
 the next image. (Numbers published before 2026-08-29 came from an
 earlier measurement era — before the `enable_thinking` template fix
 changed drafting and eval behavior — and are labeled where kept.)
@@ -82,6 +86,8 @@ KV budget:
 
 | Configuration | KV pool (tokens) | Concurrency @max-len | Notes |
 |---|---:|---:|---|
+| **Native 1M: `MAX_LEN=1048576`, DFlash2 + `nvfp4_ds_mla` KV** | **2,144,814** | 2.05× | two concurrent full-length native-1M banks (FINDINGS §13); needs the NVFP4 lane + the `persistent_topk` fix (`GLM53_TOPK_FIX_SO` on the v1 image); ~15 min per cold 1M prefill, run with `MNBT=4096` |
+| 524k, DFlash2 + `nvfp4_ds_mla` KV | 1,702,584 | 3.25× | rope-less 304 B/token records with a dynamic per-token scale (`VLLM_NVFP4_MLA_DYNAMIC_SCALE=1`, no calibration file); quality between the two fp8 lanes (math 88, lavd 10 EXACT) |
 | **GLM_NEXT lane: 524k, DFlash2 + `fp8_ds_mla` KV** | **1,324,163** | 2.53× | ratified default 2026-08-30 (b12x 528 B/token packed records); on the `v1-dflash2` image it needs the hotfix overlays — becomes the baked default with the next image. Drafterless pool: 1,858,451 (the deficit vs the row below is entirely the draft ring-KV running bf16 under the skip mechanism) |
 | 524k, DFlash2 + `fp8_e4m3` KV | 1,435,070 | 2.74× | the 2026-08-29 default, fully supported on the shipped image; vLLM auto-bumps the KV block to 4608 for KDA/attention page parity |
 | 358k, DFlash2 + fp8 | 1,275,306 | 3.56× | `MAX_LEN=358400` — more concurrency headroom |
@@ -128,6 +134,8 @@ relaunches (`~/glm53-vllm-cache/jit`).
 
 | Profile | How | When |
 |---|---|---|
+| **NVFP4 KV** | GLM_NEXT lane knobs + `KV_DTYPE=nvfp4_ds_mla VLLM_NVFP4_MLA_DYNAMIC_SCALE=1` | +28.6% pool (3.25 × 524k banks) at a small quality cost vs `fp8_ds_mla` (FINDINGS §13); dynamic per-token scales, no calibration file |
+| **Native 1M** | NVFP4 knobs + `MAX_LEN=1048576 MNBT=4096` (+ `GLM53_TOPK_FIX_SO=/cache/topk_fix.so` on the v1 image) | 2.05 concurrent 1M banks; needle-exact at 875k depth, decode flat at full depth; ~15 min cold 1M prefill (FINDINGS §13) |
 | **GLM_NEXT b12x lane** | `ATTN_BACKEND=B12X_MLA_SPARSE KV_DTYPE=fp8_ds_mla KV_SKIP_LAYERS=sliding_window` on both launches | ratified default 2026-08-30 — beats the fp8_e4m3 lane on every quality and speed gate (see FINDINGS §12); on the `v1-dflash2` image it requires the hotfix overlays (fork @ `5c9e2bfd2` + b12x `glm-next-backport`) and becomes the baked default with the next image |
 | Shipped-image default | (nothing) | 524k context, DFlash2 k=7 + fp8_e4m3 KV + CUDA graphs — 2.74 concurrent full banks, fully baked into `v1-dflash2` |
 | Short-context bf16 | `MAX_LEN=131072 KV_DTYPE= ATTN_BACKEND= SKIP_MM_PROFILING=0 MAX_SEQS=6` on both launches | the pre-2026-08-29 production config; 131k context |
