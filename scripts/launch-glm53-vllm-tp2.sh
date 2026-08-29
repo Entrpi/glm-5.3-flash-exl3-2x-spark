@@ -152,6 +152,13 @@ KV_ARGS=()
 # the fork's auto-selection (FLASHINFER_MLA_SPARSE_SM90 on these boxes).
 ATTN_BACKEND="${ATTN_BACKEND:-}"
 [[ -n "$ATTN_BACKEND" ]] && KV_ARGS+=(--attention-backend "$ATTN_BACKEND")
+# Layers exempt from KV quantization. The GLM_NEXT fp8_ds_mla lane needs the
+# DFlash2 draft ring-KV layers on bf16 (the packed 528 B record is
+# target-MLA-only): use KV_SKIP_LAYERS=sliding_window — the draft ring is
+# sliding-window-typed, and the single token avoids the CLI's list parsing
+# (a comma-joined index string arrives as one unmatched element).
+KV_SKIP_LAYERS="${KV_SKIP_LAYERS:-}"
+[[ -n "$KV_SKIP_LAYERS" ]] && KV_ARGS+=(--kv-cache-dtype-skip-layers "$KV_SKIP_LAYERS")
 [[ -n "$KV_CACHE_MEMORY" ]] && KV_ARGS+=(--kv-cache-memory "$KV_CACHE_MEMORY")
 EAGER_ARGS=()
 [[ "$EAGER" != "0" ]] && EAGER_ARGS=(--enforce-eager)
