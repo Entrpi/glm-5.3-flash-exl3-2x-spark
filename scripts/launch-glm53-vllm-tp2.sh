@@ -62,6 +62,10 @@ SKIP_MM_PROFILING="${SKIP_MM_PROFILING:-0}"  # 1 = skip the max-size multimodal
                                          # dummy profile (needed at long MAX_LEN
                                          # on GB10 unified memory; text profile
                                          # still runs)
+BLOCK_SIZE="${BLOCK_SIZE:-2304}"         # KV block; 2304 aligns the KDA state
+                                         # page to the bf16 attention page and
+                                         # satisfies block %% (index_kpool*64).
+                                         # 4608 is the fp8-KV rebalance candidate.
 KV_DTYPE="${KV_DTYPE:-}"                 # empty = bf16 (quality default);
                                          # fp8_e4m3 = 769,817-token pool option
                                          # (math_500 n=100 gate: 89% >= 88% bar)
@@ -206,7 +210,7 @@ docker run --gpus all -d \
     --tensor-parallel-size 2 \
     --gpu-memory-utilization "$GMU" \
     --max-model-len "$MAX_LEN" \
-    --max-num-seqs "$MAX_SEQS" --block-size 2304 --mm-processor-cache-gb "$MM_CACHE_GB" \
+    --max-num-seqs "$MAX_SEQS" --block-size "$BLOCK_SIZE" --mm-processor-cache-gb "$MM_CACHE_GB" \
     "${MNBT_ARGS[@]}" "${SPEC_ARGS[@]}" "${KV_ARGS[@]}" \
     "${EAGER_ARGS[@]}" \
     --tool-call-parser glm47 --enable-auto-tool-choice \
