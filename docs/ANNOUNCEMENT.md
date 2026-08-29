@@ -44,11 +44,12 @@ Default serving profile (2026-08-29): `--max-model-len 524288`,
 
 **Validation results:** 41/41 unit tests in the pulled image
 (`scripts/run_tests.sh`); 15/15 self-containment checks
-(`scripts/check_image.sh`); math_500 94% (n=50), gpqa_diamond 78% (n=50),
-fp8-KV option gate 89% (n=100); speculative equivalence lossless-up-to-ties
-(`tools/dflash_equiv.py`); vision + tool-call smoke at temp 0; c1 33–35
-tok/s prose / 72 structured, TTFT 0.42–0.51 s (README "Benchmarks",
-commands in "Reproducing").
+(`scripts/check_image.sh`); on the shipping default (524k/fp8):
+math_500 87% (n=100, parity with bf16 86/100), gpqa_diamond 72% (n=50),
+estonia 133k retrieval 9/10, lavd n=30 parity vs bf16; speculative
+equivalence lossless-up-to-ties (`tools/dflash_equiv.py`); vision +
+tool-call smoke at temp 0; c1 ~29 tok/s prose / 74.6 structured, TTFT
+0.44–0.49 s (README "Benchmarks", commands in "Reproducing").
 
 **Known limitations:** local-both weights topology carries a documented
 head swap-wedge risk during load (`--nfs` is the validated fallback); video

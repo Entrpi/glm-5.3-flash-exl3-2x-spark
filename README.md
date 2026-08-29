@@ -10,11 +10,17 @@ upstream project. Built and maintained by [Entrpi](https://github.com/Entrpi);
 report problems on [this repo's issue tracker](https://github.com/Entrpi/glm-5.3-flash-exl3-2x-spark/issues)
 (please debug against this derivative before assigning a problem upstream).
 
-**Headline numbers** (temperature 0 unless noted): ~33–35 tok/s single-stream
-prose decode (+21% over the MTP-4 head), **72 tok/s** on high-acceptance
-structured output, TTFT 0.42–0.51 s, 112k-token prefill in ~55 s,
-math_500 **94%** (n=50), gpqa_diamond **78%**, vision verified end-to-end
-including tool calls. Every claim is cashed out in a table below.
+**Headline numbers** (temperature 0 unless noted, measured 2026-08-29 on
+the shipping default — 524k context, fp8 KV, MXFP8 DFlash2 drafter):
+**~29 tok/s** single-stream prose decode, **74.6 tok/s** on
+high-acceptance structured output, TTFT 0.44–0.49 s, **1,435,070-token KV
+pool** (2.74 concurrent 524k banks — the largest published on this
+hardware at this dtype), 133k-token prefill in ~95 s, math_500 **87%**
+(n=100), gpqa_diamond **72%**, estonia 133k retrieval **9/10**, vision
+verified end-to-end including tool calls. Every claim is cashed out in a
+table below. (Numbers published before 2026-08-29 came from an earlier
+measurement era — before the `enable_thinking` template fix changed
+drafting and eval behavior — and are labeled where kept.)
 
 - **Model**: [zai-org/GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) — 320B MoE, 18B active, hybrid KDA + sparse-MLA attention
 - **Quant**: [brandonmusic/GLM-5.3-Flash-tr3-4bpw](https://huggingface.co/brandonmusic/GLM-5.3-Flash-tr3-4bpw) (EXL3/TR3 uniform-K4, ~176 GiB; independent KLD panel puts it at parity with the official FP8 release)
@@ -137,12 +143,17 @@ calling (`glm47` parser) and vision (image inputs) work in both modes.
 | EXL3 fused + graphs, MTP-4 | 28.6 | 91.7 | 0.422 s | 90% |
 | **EXL3 fused + graphs, DFlash2 k=7** | **33.1–34.7** | 83.7–96.0 | 0.50 s | **94%** |
 
+> Earlier-era single-variable comparison (both arms measured under the same
+> conditions, so the **+21% relative win stands**; absolute numbers predate
+> the template fix). Current-era absolutes on the shipping default: c1
+> prose 28.9, structured 74.6, TTFT 0.44–0.49 s.
+
 DFlash2 accepts 3.9–5.5 of 8 positions on mixed work versus MTP-4's 3.8 of
 5 — the deeper block wins ~21% single-stream. MTP-5 was also tested and
 regresses (prose acceptance collapses at position 5); MTP-4 remains the best
 fallback. Ranges are boot-to-boot variance across three validated boots.
 
-### Acceptance by workload (DFlash2, k=7, accept length of 8 possible)
+### Acceptance by workload (DFlash2, k=7, accept length of 8 possible; earlier-era battery — relative ordering stands, current-era prose accept is ~2.3/7 + bonus)
 
 | Workload | Accept | e2e tok/s |
 |---|---:|---:|
@@ -189,9 +200,10 @@ as [scripts/bench_decode_miaai.py](scripts/bench_decode_miaai.py):
 
 | Gate | Result |
 |---|---|
-| math_500 n=50 (this image) | **94%** (47/50) |
-| math_500 n=100 (fp8-KV option gate) | 89% (bar ≥88% → fp8 allowed as option) |
-| gpqa_diamond n=50 | **78%** (39/50) — best of three stacks tested on this kit |
+| math_500 n=100, shipping default (fp8@524k) | **87%** — parity with bf16 (86/100 same-day A/B) |
+| gpqa_diamond n=50, shipping default | **72%** (36/50, robust grading) |
+| estonia (133,186-token retrieval, n=10, high reasoning) | **9/10** — community band |
+| lavd ledger audit (n=30, high reasoning) | EXACT 5 / NEAR 23 / FAIL 2 — parity with bf16 |
 | Speculative equivalence | lossless up to argmax tie-flips (rescoring-control methodology, [tools/dflash_equiv.py](tools/dflash_equiv.py)) |
 | Vision | plain image + image-with-tool-call verified at temp 0; drafting shows **no acceptance penalty** on vision requests |
 
