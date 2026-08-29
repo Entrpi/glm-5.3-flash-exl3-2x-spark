@@ -74,7 +74,7 @@ KV budget:
 |---|---:|---:|---|
 | **Default: 524k, DFlash2 + `fp8_e4m3` KV** | **1,435,070** | 2.74× | long-context production config; vLLM auto-bumps the KV block to 4608 for KDA/attention page parity |
 | 358k, DFlash2 + fp8 | 1,275,306 | 3.56× | `MAX_LEN=358400` — more concurrency headroom |
-| 131k short-context mode, bf16 KV | 520,470 | 3.97× | `MAX_LEN=131072 KV_DTYPE= SKIP_MM_PROFILING=0 MAX_SEQS=6` — best math quality |
+| 131k short-context mode, bf16 KV | 520,470 | 3.97× | `MAX_LEN=131072 KV_DTYPE= SKIP_MM_PROFILING=0 MAX_SEQS=6` — the pre-2026-08-29 default; math parity with fp8 (86 vs 87 n=100) |
 | 131k, fp8 (2304 block) | 769,817 | 5.87× | historical option gate |
 | 131k, no speculation, bf16 | 917,504 | 7.00× | `SPEC=none` |
 
