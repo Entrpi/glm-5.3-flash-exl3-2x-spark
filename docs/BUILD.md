@@ -32,7 +32,7 @@ Two layers:
    ```yaml
    build_date: 2026-08-28T16:21:14Z
    vllm_version: 0.26.1rc1.dev960+g90104cfe4.d20260828
-   vllm_commit: 90104cfe4fd67e93e90ae5afadc0f011ebc06fb8   # = the public branch HEAD
+   vllm_commit: 90104cfe4fd67e93e90ae5afadc0f011ebc06fb8   # this image's build commit (branch main has since advanced — e.g. 88ca596c6 MXFP8 draft loader — and lands in the next image)
    flashinfer_commit: 083012d6
    gpu_arch: 12.1a
    build_args:

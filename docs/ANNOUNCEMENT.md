@@ -33,12 +33,14 @@ FlashInfer fp8-MLA sm12x patches. Inherited: b12x runtime, breakable CUDA
 graphs, kpool sparse attention (local-inference-lab lineage).
 
 **Tested configuration:** 2× GB10 (DGX Spark), TP2 over 200GbE RoCE,
-brandonmusic EXL3/TR3 4bpw (120 shards), `--quantization exl3`, bf16 KV
-(fp8_e4m3 gated option), DFlash2 `num_speculative_tokens=7`
-(MTP-4 fallback), CUDA graphs on, `--max-model-len 131072`,
-`--max-num-seqs 6 --max-num-batched-tokens 8192 --block-size 2304`,
-`gpu-memory-utilization 0.85`, `kv-cache-memory 12.4e9`, NFS and
-local-weights topologies (NFS is the production-validated one).
+brandonmusic EXL3/TR3 4bpw (120 shards), `--quantization exl3`, DFlash2
+`num_speculative_tokens=7` (MTP-4 fallback), CUDA graphs on,
+`gpu-memory-utilization 0.85`, `kv-cache-memory 12.4e9`, MNBT 8192, NFS
+and local-weights topologies (NFS is the production-validated one).
+Default serving profile (2026-08-29): `--max-model-len 524288`,
+`fp8_e4m3` KV, `--max-num-seqs 4` — 1,435,070-token pool, estonia
+133k-retrieval 9/10, lavd n=30 parity vs bf16. Short-context profile:
+131,072 / bf16 KV / seqs 6 (block 2304).
 
 **Validation results:** 41/41 unit tests in the pulled image
 (`scripts/run_tests.sh`); 15/15 self-containment checks
@@ -50,11 +52,12 @@ commands in "Reproducing").
 
 **Known limitations:** local-both weights topology carries a documented
 head swap-wedge risk during load (`--nfs` is the validated fallback); video
-inputs untested; 900k-context serving not attempted (see the MiaAI recipe);
-`KV_DTYPE=fp8_e4m3` is an option, not the default; draft TP=1 knob is
-plumbed but inert on this fork; the MXFP8-quantized DFlash2 draft
-checkpoint does not load (draft quant hydration is exl3-only here — use
-the bf16 drafter).
+inputs untested; 900k single-request context not attempted (see the MiaAI
+recipe; this recipe's default is 524k banks × 2.74 concurrency); draft
+TP=1 knob is plumbed but inert on this fork; the MXFP8-quantized DFlash2
+draft checkpoint does not load **in this image build** (the loader fix is
+on the branch @ `88ca596c6` and ships in the next image — until then use
+the bf16 drafter with this image).
 
 **Support contact or issue tracker:**
 [github.com/Entrpi/glm-5.3-flash-exl3-2x-spark/issues](https://github.com/Entrpi/glm-5.3-flash-exl3-2x-spark/issues)

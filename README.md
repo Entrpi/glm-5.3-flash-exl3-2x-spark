@@ -176,11 +176,11 @@ as [scripts/bench_decode_miaai.py](scripts/bench_decode_miaai.py):
 
 > A best-on-each-stack comparison, not a single-variable controlled run —
 > different vLLM lineages, KV formats, and context ceilings. Their recipe
-> holds a real edge this one does not attempt: 900k-token max context
-> (982,612-token packed-fp8 pool). This stack counters with bf16-KV quality
-> defaults, 4× the concurrency at 131k, ~8× larger prefill chunks, and the
-> deeper eval story. Both projects independently converged on the same three
-> hard fixes (drafter KV grouping, mHC aux capture, non-causal draft
+> still holds the max-context edge (900k, one request filling a
+> 982,612-token packed-fp8 pool); this stack now serves 524k banks with
+> 2.74× concurrency (1,435,070-token pool), ~8× larger prefill chunks, and
+> the deeper eval story. Both projects independently converged on the same
+> three hard fixes (drafter KV grouping, mHC aux capture, non-causal draft
 > attention) — see [docs/COMPARISON.md](docs/COMPARISON.md).
 
 ### Quality
