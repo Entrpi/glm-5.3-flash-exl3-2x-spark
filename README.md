@@ -81,10 +81,10 @@ KV budget:
 **The fp8 trade, measured:** long-context quality is at parity with bf16
 (estonia 133k-token retrieval 9/10 — community band; lavd ledger-audit
 n=30 statistically identical; 111k needle all-facts-exact), and math_500
-shows no regression against current-template bf16 (fp8@524k: 87–88%;
-same-day bf16 re-measure: 80% n=50 — the older 94% figure predates the
-`enable_thinking` template fix and is not comparable). bf16 cannot reach
-the long banks — its pool is ~0.99× a single 524k request. Estonia prefill: 133,186 tokens at
+is at parity — a same-day, same-harness n=100 A/B: fp8@524k 87/100,
+bf16@131k 86/100 (the older 94% n=50 figure is from an earlier
+measurement era; the current band is 86–88% at either dtype). bf16
+cannot reach the long banks — its pool is ~0.99× a single 524k request. Estonia prefill: 133,186 tokens at
 ~1,400 tok/s through the default 8192-token chunks.
 
 The 12.4 GB KV budget is pinned deliberately. Explicit budgets bypass vLLM's

@@ -188,14 +188,14 @@ Quality, measured on the shipped config: **long context is at parity**
 (estonia 133,186-token retrieval 9/10 twice — community band 29–30/30;
 lavd ledger audit n=30 EXACT 5/NEAR 23/FAIL 2 vs bf16's 6/21/3; 111k
 needle all-facts-exact), acceptance 4.51/7 and structured decode
-74.2 tok/s (≥ the bf16 72.4). **math_500: no regression vs
-current-template bf16.** The 524k/fp8 config measures 88% (44/50) and
-87% (87/100). The oft-quoted 94% bf16 figure is **thinking-leak-era** —
-before the `enable_thinking` template fix, reasoning leaked into content
-and inflated math scores; a same-day bf16 re-measure on the current
-template scored 80% (n=50). Treat pre-fix and post-fix quality numbers
-as separate eras; within the current era, fp8 KV shows no math cost.
-bf16 cannot serve the long banks anyway (0.99× one 524k request).
+74.2 tok/s (≥ the bf16 72.4). **math_500: parity, settled by a
+same-day, same-harness n=100 A/B** — fp8@524k **87/100** (88.0% pooled
+with a 44/50 run), bf16@131k **86/100**. fp8 KV costs nothing on math.
+The oft-quoted 94% (n=50) belongs to an earlier measurement era (template
+distribution + n=50 noise) and should not be used as a baseline; the
+current-era band for this stack is **86–88%** at either KV dtype,
+thinking off, temp 0. bf16 cannot serve the long banks anyway (0.99× one
+524k request).
 
 Long-context validation used
 [local-inference-lab/llm-inference-bench](https://github.com/local-inference-lab/llm-inference-bench)
