@@ -80,11 +80,11 @@ KV budget:
 
 **The fp8 trade, measured:** long-context quality is at parity with bf16
 (estonia 133k-token retrieval 9/10 — community band; lavd ledger-audit
-n=30 statistically identical; 111k needle all-facts-exact), while
-math_500 costs ~6 points (88.0% pooled n=250 vs 94% bf16). bf16 cannot
-reach the long banks — its pool is ~0.99× a single 524k request — so the
-short-context bf16 mode is the escape hatch for math-heavy workloads, not
-an alternative long-context config. Estonia prefill: 133,186 tokens at
+n=30 statistically identical; 111k needle all-facts-exact), and math_500
+shows no regression against current-template bf16 (fp8@524k: 87–88%;
+same-day bf16 re-measure: 80% n=50 — the older 94% figure predates the
+`enable_thinking` template fix and is not comparable). bf16 cannot reach
+the long banks — its pool is ~0.99× a single 524k request. Estonia prefill: 133,186 tokens at
 ~1,400 tok/s through the default 8192-token chunks.
 
 The 12.4 GB KV budget is pinned deliberately. Explicit budgets bypass vLLM's
@@ -118,7 +118,7 @@ relaunches (`~/glm53-vllm-cache/jit`).
 | Profile | How | When |
 |---|---|---|
 | **Default** | (nothing) | 524k context, DFlash2 k=7 + fp8 KV + CUDA graphs — 2.74 concurrent full banks |
-| Short-context / max-math | `MAX_LEN=131072 KV_DTYPE= SKIP_MM_PROFILING=0 MAX_SEQS=6` on both launches | bf16 KV: math_500 94% vs the default's 88%; 131k context |
+| Short-context bf16 | `MAX_LEN=131072 KV_DTYPE= SKIP_MM_PROFILING=0 MAX_SEQS=6` on both launches | the pre-2026-08-29 production config; 131k context |
 | MTP fallback | `MTP=4` on both launches | if the drafter ever misbehaves; ~21% slower |
 | No speculation | `SPEC=none` | maximum KV pool, debugging |
 

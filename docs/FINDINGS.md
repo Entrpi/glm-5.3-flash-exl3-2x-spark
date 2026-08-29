@@ -188,11 +188,14 @@ Quality, measured on the shipped config: **long context is at parity**
 (estonia 133,186-token retrieval 9/10 twice — community band 29–30/30;
 lavd ledger audit n=30 EXACT 5/NEAR 23/FAIL 2 vs bf16's 6/21/3; 111k
 needle all-facts-exact), acceptance 4.51/7 and structured decode
-74.2 tok/s (≥ the bf16 72.4). **math_500 is the price:** 88.0% pooled
-(n=250: 89/100 + 44/50 + 87/100) vs bf16's 94% — consistent across three
-measurements and attributable to fp8 KV. bf16 cannot serve the long banks
-(0.99× one 524k request), so this is the intrinsic cost of long context
-on this stack, mitigated by the one-line short-context profile.
+74.2 tok/s (≥ the bf16 72.4). **math_500: no regression vs
+current-template bf16.** The 524k/fp8 config measures 88% (44/50) and
+87% (87/100). The oft-quoted 94% bf16 figure is **thinking-leak-era** —
+before the `enable_thinking` template fix, reasoning leaked into content
+and inflated math scores; a same-day bf16 re-measure on the current
+template scored 80% (n=50). Treat pre-fix and post-fix quality numbers
+as separate eras; within the current era, fp8 KV shows no math cost.
+bf16 cannot serve the long banks anyway (0.99× one 524k request).
 
 Long-context validation used
 [local-inference-lab/llm-inference-bench](https://github.com/local-inference-lab/llm-inference-bench)
