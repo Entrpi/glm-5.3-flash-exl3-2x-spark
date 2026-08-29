@@ -58,6 +58,10 @@ SPEC="${SPEC:-dflash}"                   # dflash (default) | none; MTP>0 overri
 MTP="${MTP:-0}"                          # fallback: MTP=4 SPEC=none
 DFLASH_TOKENS="${DFLASH_TOKENS:-7}"      # trained block size 8 = 1 bonus + 7 masks
 EAGER="${EAGER:-0}"                      # 0 = CUDA graphs (validated); 1 = eager
+SKIP_MM_PROFILING="${SKIP_MM_PROFILING:-0}"  # 1 = skip the max-size multimodal
+                                         # dummy profile (needed at long MAX_LEN
+                                         # on GB10 unified memory; text profile
+                                         # still runs)
 KV_DTYPE="${KV_DTYPE:-}"                 # empty = bf16 (quality default);
                                          # fp8_e4m3 = 769,817-token pool option
                                          # (math_500 n=100 gate: 89% >= 88% bar)
@@ -126,6 +130,7 @@ KV_ARGS=()
 [[ -n "$KV_CACHE_MEMORY" ]] && KV_ARGS+=(--kv-cache-memory "$KV_CACHE_MEMORY")
 EAGER_ARGS=()
 [[ "$EAGER" != "0" ]] && EAGER_ARGS=(--enforce-eager)
+[[ "$SKIP_MM_PROFILING" != "0" ]] && EAGER_ARGS+=(--skip-mm-profiling)
 MNBT_ARGS=()
 [[ -n "$MNBT" ]] && MNBT_ARGS=(--max-num-batched-tokens "$MNBT")
 
