@@ -51,7 +51,9 @@ commands in "Reproducing").
 head swap-wedge risk during load (`--nfs` is the validated fallback); video
 inputs untested; 900k-context serving not attempted (see the MiaAI recipe);
 `KV_DTYPE=fp8_e4m3` is an option, not the default; draft TP=1 knob is
-plumbed but inert on this fork.
+plumbed but inert on this fork; the MXFP8-quantized DFlash2 draft
+checkpoint does not load (draft quant hydration is exl3-only here — use
+the bf16 drafter).
 
 **Support contact or issue tracker:**
 [github.com/Entrpi/glm-5.3-flash-exl3-2x-spark/issues](https://github.com/Entrpi/glm-5.3-flash-exl3-2x-spark/issues)

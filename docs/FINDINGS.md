@@ -149,6 +149,7 @@ Acceptance is workload-dominated and nothing else moves it much:
 | Head/worker swap | 3× boot death | local-NVMe read vs unified-memory reclaim (§5) |
 | KV 13.4 GB | rejected | floor collapse (§5) |
 | Strict token-equality equivalence | misleading | tie-flips + nondeterminism (§4) |
+| MXFP8 DFlash2 draft ([local-inference-lab checkpoint](https://huggingface.co/local-inference-lab/GLM-5.3-Flash-DFlash2-MXFP8)) | boot crash at draft load | this fork's draft-side quant-config hydration is exl3-only, so the draft builds unquantized and the checkpoint's `weight_scale` params have no home (first at `candidate_selector.hidden_projection`). Newer fork lineages load it; porting the hydration + quant-aware DFlash2 module construction is parked |
 
 Kept anyway although null: `EXL3_PREFILL_CHUNK` passthrough (free knob).
 
