@@ -1,0 +1,82 @@
+# SLIM rebase of ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v1-dflash2.
+# Technique credit: AEON-7/vllm-ultimate-dgx-spark Dockerfile.slim, whose
+# measured analysis transfers to this image almost verbatim.
+#
+# What shrinks (measured on v1-dflash2, 25 GB total):
+#   /usr/local/cuda-13.0 is 5.0 GB, of which ~2.4 GB is static .a archives
+#   nothing links at runtime, and (per AEON's /proc/self/maps analysis, same
+#   torch wheel layout) the toolkit .so duplicate the pip nvidia-* wheels in
+#   dist-packages that torch actually resolves. Only the JIT toolchain is
+#   load-bearing: DG_JIT_USE_NVRTC=0 means DeepGEMM drives nvcc at runtime,
+#   Triton needs ptxas (TRITON_PTXAS_PATH), FlashInfer/CuTeDSL JIT compile
+#   against the CUDA headers. Keep bin/ + nvvm/ + include/ + stubs (~0.3 GB),
+#   drop the rest. /opt/nvidia (0.5 GB) reduces to its entrypoint scripts.
+#   Expected result: ~17-18 GB total, ~8-9 GB compressed pull (from ~25/~12).
+#
+# Unlike AEON's donor, this image has no dead layer history (fresh multi-
+# stage build), and its Python is the DISTRO 3.12 on noble — so the base
+# stays ubuntu24.04 and python comes from apt, with the donor's
+# /usr/local/lib/python3.12/dist-packages dropped straight in.
+#
+# Build (on a box holding the donor image, cluster idle — the COPY streams
+# ~16 GB through the page cache):
+#   docker build -f Dockerfile.slim -t ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v1-dflash2-slim .
+# Then run the FULL gauntlet (check_image.sh, run_tests.sh, boot + bench)
+# before shipping — this is a rebase, not a layer edit.
+
+FROM ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v1-dflash2 AS donor
+
+FROM nvidia/cuda:13.0.2-base-ubuntu24.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update -qq && apt-get install -y --no-install-recommends \
+      python3.12 python3.12-dev libpython3.12 \
+      ca-certificates curl git gcc-12 g++-12 make ninja-build \
+      libibverbs1 ibverbs-providers librdmacm1 libnuma1 numactl \
+      libgl1 libglib2.0-0 libsndfile1 procps \
+    && ln -sf /usr/bin/gcc-12 /usr/bin/gcc && ln -sf /usr/bin/g++-12 /usr/bin/g++ \
+    && ln -sf /usr/bin/gcc-12 /usr/bin/cc  && ln -sf /usr/bin/g++-12 /usr/bin/c++ \
+    && ln -sf /usr/bin/python3.12 /usr/local/bin/python3 \
+    && ln -sf /usr/bin/python3.12 /usr/local/bin/python \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# JIT toolchain only (see header): nvcc/ptxas/nvvm + headers + driver stubs.
+COPY --from=donor /usr/local/cuda-13.0/bin/  /usr/local/cuda-13.0/bin/
+COPY --from=donor /usr/local/cuda-13.0/nvvm/ /usr/local/cuda-13.0/nvvm/
+COPY --from=donor /usr/local/cuda-13.0/targets/sbsa-linux/include/ /usr/local/cuda-13.0/targets/sbsa-linux/include/
+COPY --from=donor /usr/local/cuda-13.0/targets/sbsa-linux/lib/stubs/ /usr/local/cuda-13.0/targets/sbsa-linux/lib/stubs/
+RUN ln -sfn /usr/local/cuda-13.0 /usr/local/cuda \
+    && ln -sfn targets/sbsa-linux/include /usr/local/cuda-13.0/include \
+    && ln -sfn targets/sbsa-linux/lib /usr/local/cuda-13.0/lib64
+
+# The payload: the full python userland + entry points + runtime dirs.
+COPY --from=donor /usr/local/lib/python3.12/dist-packages/ /usr/local/lib/python3.12/dist-packages/
+COPY --from=donor /usr/local/bin/ /usr/local/bin/
+COPY --from=donor /workspace/ /workspace/
+COPY --from=donor /exl3ext/ /exl3ext/
+COPY --from=donor /opt/nvidia/nvidia_entrypoint.sh /opt/nvidia/nvidia_entrypoint.sh
+COPY --from=donor /opt/nvidia/entrypoint.d/ /opt/nvidia/entrypoint.d/
+
+# The .so torch actually loads live in the pip nvidia wheels; the loader
+# must find them without RPATH (AEON's ld.so.conf trick, our paths).
+RUN printf "%s\n" \
+      /usr/local/lib/python3.12/dist-packages/nvidia/cu13/lib \
+      /usr/local/lib/python3.12/dist-packages/nvidia/cudnn/lib \
+      /usr/local/lib/python3.12/dist-packages/nvidia/nccl/lib \
+      /usr/local/lib/python3.12/dist-packages/nvidia/cusparselt/lib \
+      /usr/local/lib/python3.12/dist-packages/nvidia/nvshmem/lib \
+      > /etc/ld.so.conf.d/000-pip-nvidia.conf && ldconfig
+
+# Donor environment, verbatim where material.
+ENV PATH=/workspace/vllm:/usr/local/nvidia/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    LD_LIBRARY_PATH=/usr/local/nvidia/lib:/usr/local/nvidia/lib64:/usr/local/cuda/lib64 \
+    LIBRARY_PATH=/usr/local/cuda/lib64/stubs \
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
+    VLLM_BASE_DIR=/workspace/vllm \
+    DG_JIT_USE_NVRTC=0 USE_CUDNN=1 \
+    MAX_JOBS=16 CMAKE_BUILD_PARALLEL_LEVEL=16 NINJAFLAGS=-j16 MAKEFLAGS=-j16 \
+    TORCH_CUDA_ARCH_LIST=12.1a FLASHINFER_CUDA_ARCH_LIST=12.1a \
+    TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas \
+    TIKTOKEN_ENCODINGS_BASE=/workspace/vllm/tiktoken_encodings \
+    VLLM_EXL3_EXT_PATH=/exl3ext
+WORKDIR /workspace/vllm
+ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
