@@ -14,7 +14,7 @@ side-by-side.
 | vLLM base | local-inference-lab fork branch, image rebuilt from source | public day-0-family image pinned by digest + anchored patch scripts |
 | Attention | fork's NoPE-MLA lane, DeepGEMM kpool, block 2304 | `FLASHINFER_MLA_SPARSE_SM120`, NoPE latent zero-padded into GLM_NSA 576 |
 | KV format | **bf16 default** (fp8_e4m3 gated option) | packed `fp8_ds_mla` **mandatory** (bf16 has no sparse kernel there) |
-| Context / pool | 131k, 520,470 tok (3.97×); fp8 option 769,817 | **900k**, 982,612 tok (1.09× — one full request) |
+| Context / pool | **524k default (2026-08-29)**, 1,435,070 tok fp8 (2.74×); 131k bf16 mode 520,470 | **900k**, 982,612 tok (1.09× — one full request) |
 | Prefill chunk | 8192 (112k prefill ~55 s) | 1024 (8192 oversubscribes their indexer top-k) |
 | Fused EXL3 MoE | tpurtell b12x CuTeDSL trellis | turboderp `exllamav3_ext.exl3_moe` |
 | Draft placement | TP2 (sharded with the target) | TP1 on rank 0 |
@@ -63,13 +63,15 @@ structured post-template-fix); the TTFT gap favors this stack consistently.
 
 ## What each stack is for
 
-- **Choose the MiaAI recipe** for maximum context: 900k tokens on two
-  Sparks is a real capability this recipe does not attempt (its packed-fp8
-  KV is ~40% smaller per token, and mandatory).
-- **Choose this recipe** for production serving at 131k: bf16-KV quality
-  defaults with n≥50 task gates, 4× concurrency, ~8× faster long-prompt
-  prefill, deeper fallbacks, and the acceptance/memory methodology to
-  extend it safely.
+- **Choose the MiaAI recipe** for maximum single-request context: 900k
+  tokens on two Sparks still exceeds this recipe's 524k default (their
+  packed-fp8 KV is mandatory; one request fills the pool).
+- **Choose this recipe** for production long-context serving: 524k banks
+  with 2.74× concurrency (estonia 9/10, lavd parity, n≥50/n=100 task
+  gates), ~8× faster long-prompt prefill (MNBT 8192 survives 133k
+  prefills on this lane), a one-line bf16 short-context profile for
+  math-heavy work, deeper fallbacks, and the acceptance/memory
+  methodology to extend it safely.
 
 Ideas already carried over from their recipe, with credit: JIT cache
 persistence, post-boot shape warmup, and the `enable_thinking` template

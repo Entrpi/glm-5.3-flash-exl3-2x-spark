@@ -66,14 +66,26 @@ Variants:
 
 ## Memory and context
 
-Serving defaults to 131,072-token context. The KV pool at that context, all
-measured on this stack:
+Serving defaults to a **524,288-token context** with fp8 KV (since
+2026-08-29). Measured pools on this stack, all at the same pinned 12.4 GB
+KV budget:
 
-| Configuration | KV pool (tokens) | Concurrency @131k | Notes |
+| Configuration | KV pool (tokens) | Concurrency @max-len | Notes |
 |---|---:|---:|---|
-| **Default: DFlash2 + bf16 KV** | **520,470** | 3.97× | quality-first production config |
-| `KV_DTYPE=fp8_e4m3` option | 769,817 | 5.87× | +48% pool; gated at math_500 n=100 = 89% (bar ≥88%) |
-| No speculation, bf16 | 917,504 | 7.00× | `SPEC=none` |
+| **Default: 524k, DFlash2 + `fp8_e4m3` KV** | **1,435,070** | 2.74× | long-context production config; vLLM auto-bumps the KV block to 4608 for KDA/attention page parity |
+| 358k, DFlash2 + fp8 | 1,275,306 | 3.56× | `MAX_LEN=358400` — more concurrency headroom |
+| 131k short-context mode, bf16 KV | 520,470 | 3.97× | `MAX_LEN=131072 KV_DTYPE= SKIP_MM_PROFILING=0 MAX_SEQS=6` — best math quality |
+| 131k, fp8 (2304 block) | 769,817 | 5.87× | historical option gate |
+| 131k, no speculation, bf16 | 917,504 | 7.00× | `SPEC=none` |
+
+**The fp8 trade, measured:** long-context quality is at parity with bf16
+(estonia 133k-token retrieval 9/10 — community band; lavd ledger-audit
+n=30 statistically identical; 111k needle all-facts-exact), while
+math_500 costs ~6 points (88.0% pooled n=250 vs 94% bf16). bf16 cannot
+reach the long banks — its pool is ~0.99× a single 524k request — so the
+short-context bf16 mode is the escape hatch for math-heavy workloads, not
+an alternative long-context config. Estonia prefill: 133,186 tokens at
+~1,400 tok/s through the default 8192-token chunks.
 
 The 12.4 GB KV budget is pinned deliberately. Explicit budgets bypass vLLM's
 memory profiling reserve, and GB10 unified memory does not fail gracefully —
@@ -105,8 +117,8 @@ relaunches (`~/glm53-vllm-cache/jit`).
 
 | Profile | How | When |
 |---|---|---|
-| **Default** | (nothing) | DFlash2 k=7 + bf16 KV + CUDA graphs — best quality-gated throughput |
-| fp8 KV | `KV_DTYPE=fp8_e4m3` on both launches | long-context / many-stream serving; 770k-token pool |
+| **Default** | (nothing) | 524k context, DFlash2 k=7 + fp8 KV + CUDA graphs — 2.74 concurrent full banks |
+| Short-context / max-math | `MAX_LEN=131072 KV_DTYPE= SKIP_MM_PROFILING=0 MAX_SEQS=6` on both launches | bf16 KV: math_500 94% vs the default's 88%; 131k context |
 | MTP fallback | `MTP=4` on both launches | if the drafter ever misbehaves; ~21% slower |
 | No speculation | `SPEC=none` | maximum KV pool, debugging |
 

@@ -166,10 +166,43 @@ longer carry a reasoning preamble, which *raised* structured acceptance
 0.92 → 0.98 (+7% tok/s). With thinking on, reasoning arrives in
 `message.reasoning` — note the field name (not `reasoning_content`).
 
+## 10. The 500k default (2026-08-29)
+
+The default moved from 131k/bf16 to **524,288-token context with
+`KV_DTYPE=fp8_e4m3`** — 1,435,070-token pool (2.74 concurrent full banks)
+at the *unchanged* 12.4 GB budget. Three findings made it cheap:
+
+- **The block-size dividend.** At fp8, vLLM auto-bumps the KV block
+  2304→4608 to keep the KDA linear-state page equal to the attention page
+  ("Setting attention block size to 4608" in the boot log). Effective
+  per-token cost fell 23.8 KB → 9.7 KB — nearly half of it was the
+  fp32 KDA state page, whose per-token share halves with the bigger block.
+  The old 131k-era fp8 figure (769,817 tokens) predates this rebalance.
+- **MNBT 8192 survives 133k prefill** on this lane (~1,400 tok/s). The
+  MiaAI recipe's 1024-chunk cap is a FlashInfer-SM120-lane constraint that
+  does not transfer here.
+- **`SKIP_MM_PROFILING=1`** is required at long MAX_LEN — the max-size
+  multimodal dummy profile OOMs GB10 unified memory.
+
+Quality, measured on the shipped config: **long context is at parity**
+(estonia 133,186-token retrieval 9/10 twice — community band 29–30/30;
+lavd ledger audit n=30 EXACT 5/NEAR 23/FAIL 2 vs bf16's 6/21/3; 111k
+needle all-facts-exact), acceptance 4.51/7 and structured decode
+74.2 tok/s (≥ the bf16 72.4). **math_500 is the price:** 88.0% pooled
+(n=250: 89/100 + 44/50 + 87/100) vs bf16's 94% — consistent across three
+measurements and attributable to fp8 KV. bf16 cannot serve the long banks
+(0.99× one 524k request), so this is the intrinsic cost of long context
+on this stack, mitigated by the one-line short-context profile.
+
+Long-context validation used
+[local-inference-lab/llm-inference-bench](https://github.com/local-inference-lab/llm-inference-bench)
+(`--test-profile estonia` / `lavd`, `--reasoning-effort high`).
+
 ## Production recommendation
 
-Serve the defaults: DFlash2 k=7, bf16 KV, CUDA graphs, MNBT 8192,
-KV budget 12.4 GB, gmu 0.85, thinking off at the serving layer. Use
-`KV_DTYPE=fp8_e4m3` only when the workload genuinely needs the 770k-token
-pool, and `MTP=4` only as an emergency fallback. Do not raise memory knobs
-without re-running the floor methodology.
+Serve the defaults: 524k context, fp8 KV, DFlash2 k=7, CUDA graphs,
+MNBT 8192, KV budget 12.4 GB, gmu 0.85, `SKIP_MM_PROFILING=1`, thinking
+off at the serving layer. For math-heavy workloads use the short-context
+profile (`MAX_LEN=131072 KV_DTYPE= SKIP_MM_PROFILING=0 MAX_SEQS=6` — bf16,
+94% math_500). `MTP=4` only as an emergency fallback. Do not raise memory
+knobs without re-running the floor methodology.

@@ -53,34 +53,47 @@ MODEL_PATH="/models/glm53-exl3"
 # ---- serving knobs (defaults = the validated production configuration) -----
 IMAGE="${IMAGE:-ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v1-dflash2}"
 NAME="${NAME:-vllm_glm53}"
-MAX_LEN="${MAX_LEN:-131072}"
+MAX_LEN="${MAX_LEN:-524288}"             # 500k default bank (2026-08-29);
+                                         # 131072 was the pre-long-context
+                                         # default and still works with
+                                         # KV_DTYPE= (bf16)
 SPEC="${SPEC:-dflash}"                   # dflash (default) | none; MTP>0 overrides
 MTP="${MTP:-0}"                          # fallback: MTP=4 SPEC=none
 DFLASH_TOKENS="${DFLASH_TOKENS:-7}"      # trained block size 8 = 1 bonus + 7 masks
 EAGER="${EAGER:-0}"                      # 0 = CUDA graphs (validated); 1 = eager
-SKIP_MM_PROFILING="${SKIP_MM_PROFILING:-0}"  # 1 = skip the max-size multimodal
-                                         # dummy profile (needed at long MAX_LEN
-                                         # on GB10 unified memory; text profile
-                                         # still runs)
-BLOCK_SIZE="${BLOCK_SIZE:-2304}"         # KV block; 2304 aligns the KDA state
-                                         # page to the bf16 attention page and
-                                         # satisfies block %% (index_kpool*64).
-                                         # 4608 is the fp8-KV rebalance candidate.
-KV_DTYPE="${KV_DTYPE:-}"                 # empty = bf16 (quality default);
-                                         # fp8_e4m3 = 769,817-token pool option
-                                         # (math_500 n=100 gate: 89% >= 88% bar)
-KV_CACHE_MEMORY="${KV_CACHE_MEMORY:-}"   # empty -> 12.4e9 (520,470 tokens @131k,
+SKIP_MM_PROFILING="${SKIP_MM_PROFILING:-1}"  # skip the max-size multimodal
+                                         # dummy profile (required at long
+                                         # MAX_LEN on GB10 unified memory;
+                                         # text profile still runs). 0 restores
+                                         # profiling for short-context boots.
+BLOCK_SIZE="${BLOCK_SIZE:-2304}"         # KV block; with fp8 KV vLLM auto-bumps
+                                         # to 4608 to keep the KDA state page
+                                         # equal to the attention page (boot
+                                         # log: "Setting attention block size
+                                         # to 4608"). 2304 is the bf16 parity
+                                         # point; must satisfy
+                                         # block %% (index_kpool*64).
+KV_DTYPE="${KV_DTYPE:-fp8_e4m3}"         # fp8_e4m3 (default 2026-08-29):
+                                         # 1,435,070-token pool @524k = 2.74
+                                         # full banks; estonia 9/10, lavd
+                                         # parity, math_500 88.0% pooled n=250
+                                         # (bf16: 94%). empty = bf16: highest
+                                         # math quality, pool ~520k tokens —
+                                         # pair with MAX_LEN=131072.
+KV_CACHE_MEMORY="${KV_CACHE_MEMORY:-}"   # empty -> 12.4e9 (1,435,070 tokens
+                                         # @524k fp8 / 520,470 @131k bf16;
                                          # 5.25 GiB measured head floor);
-                                         # "auto" -> vLLM budgeting (~468k);
-                                         # 13.4e9 gave 567k but collapsed the
-                                         # floor to 2.26 GiB — do NOT raise
+                                         # "auto" -> vLLM budgeting;
+                                         # 13.4e9 gave 567k bf16 but collapsed
+                                         # the floor to 2.26 GiB — do NOT raise
                                          # without re-measuring memory floors.
 MNBT="${MNBT:-8192}"                     # --max-num-batched-tokens: 112k-prompt
                                          # TTFT 93s->54.7s vs engine default
 MM_CACHE_GB="${MM_CACHE_GB:-0.5}"        # mm processor cache (head-resident)
 GMU="${GMU:-0.85}"                       # gpu-memory-utilization; 0.88+ risks
                                          # unified-memory swap on GB10
-MAX_SEQS="${MAX_SEQS:-6}"
+MAX_SEQS="${MAX_SEQS:-4}"                # 4 at the 524k default (2.74 banks);
+                                         # 6 was the 131k-era value
 CACHE_HOST_PATH="${CACHE_HOST_PATH:-$HOME/glm53-vllm-cache}"
 
 if [[ "$KV_CACHE_MEMORY" == "auto" ]]; then
