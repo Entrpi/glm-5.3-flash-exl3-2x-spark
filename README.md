@@ -10,17 +10,21 @@ upstream project. Built and maintained by [Entrpi](https://github.com/Entrpi);
 report problems on [this repo's issue tracker](https://github.com/Entrpi/glm-5.3-flash-exl3-2x-spark/issues)
 (please debug against this derivative before assigning a problem upstream).
 
-**Headline numbers** (temperature 0 unless noted, measured 2026-08-29 on
-the shipping default — 524k context, fp8 KV, MXFP8 DFlash2 drafter):
-**~29 tok/s** single-stream prose decode, **74.6 tok/s** on
-high-acceptance structured output, TTFT 0.44–0.49 s, **1,435,070-token KV
-pool** (2.74 concurrent 524k banks — the largest published on this
-hardware at this dtype), 133k-token prefill in ~95 s, math_500 **87%**
-(n=100), gpqa_diamond **72%**, estonia 133k retrieval **9/10**, vision
-verified end-to-end including tool calls. Every claim is cashed out in a
-table below. (Numbers published before 2026-08-29 came from an earlier
-measurement era — before the `enable_thinking` template fix changed
-drafting and eval behavior — and are labeled where kept.)
+**Headline numbers** (temperature 0 unless noted, measured 2026-08-30 on
+the ratified default — 524k context, GLM_NEXT b12x lane with packed fp8
+KV, MXFP8 DFlash2 drafter): **31.2 tok/s** single-stream prose decode,
+**~72–75 tok/s** on high-acceptance structured output, TTFT
+**0.38–0.41 s**, **1,324,163-token KV pool** (2.53 concurrent 524k
+banks; 1,858,451 drafterless), 133k-token prefill in **89 s** and a
+**full 499k bank in 6.5 min (1,277 tok/s, needle-exact at that depth)**,
+math_500 **91%** (n=100), gpqa_diamond 70%, estonia 133k retrieval
+**10/10**, lavd ledger audit **15/30 EXACT** (3× the fp8_e4m3 lane),
+vision verified end-to-end including tool calls. Every claim is cashed
+out in a table below. On the shipped `v1-dflash2` image this lane needs
+the hotfix overlays (see Profiles); it becomes the baked default with
+the next image. (Numbers published before 2026-08-29 came from an
+earlier measurement era — before the `enable_thinking` template fix
+changed drafting and eval behavior — and are labeled where kept.)
 
 - **Model**: [zai-org/GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) — 320B MoE, 18B active, hybrid KDA + sparse-MLA attention
 - **Quant**: [brandonmusic/GLM-5.3-Flash-tr3-4bpw](https://huggingface.co/brandonmusic/GLM-5.3-Flash-tr3-4bpw) (EXL3/TR3 uniform-K4, ~176 GiB; independent KLD panel puts it at parity with the official FP8 release)
