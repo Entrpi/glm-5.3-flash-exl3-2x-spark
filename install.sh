@@ -72,6 +72,7 @@ MNBT="${MNBT:-8192}"
 GMU="${GMU:-0.85}"
 MAX_SEQS="${MAX_SEQS:-4}"
 MM_CACHE_GB="${MM_CACHE_GB:-0.5}"
+LOAD_FORMAT="${LOAD_FORMAT:-}"  # instanttensor bypasses page cache on GB10 UMA
 
 SKIP_PULL=0 SKIP_DOWNLOAD=0 NO_START=0 FORCE=0
 usage() {
@@ -255,6 +256,7 @@ write_env() { # write_env <target: head|worker>
 : "\${GMU:=$GMU}"
 : "\${MAX_SEQS:=$MAX_SEQS}"
 : "\${MM_CACHE_GB:=$MM_CACHE_GB}"
+: "\${LOAD_FORMAT:=$LOAD_FORMAT}"
 EOF
 )
   if [ "$1" = head ]; then printf '%s\n' "$out" > "$HOME/.glm53-serve.env"
