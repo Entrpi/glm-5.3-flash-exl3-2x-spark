@@ -55,6 +55,24 @@ IMAGE="${IMAGE:-ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v1-dflash2}"
 NFS_PORT="${NFS_PORT:-12049}"
 PORT="${PORT:-8000}"
 
+# --- serving knobs (forwarded to ~/.glm53-serve.env by write_env) ---
+MPORT="${MPORT:-29521}"
+MAX_LEN="${MAX_LEN:-524288}"
+SPEC="${SPEC:-dflash}"
+MTP="${MTP:-0}"
+DFLASH_TOKENS="${DFLASH_TOKENS:-7}"
+EAGER="${EAGER:-0}"
+SKIP_MM_PROFILING="${SKIP_MM_PROFILING:-1}"
+BLOCK_SIZE="${BLOCK_SIZE:-2304}"
+KV_DTYPE="${KV_DTYPE-fp8_e4m3}"
+KV_CACHE_MEMORY="${KV_CACHE_MEMORY:-}"
+KV_SKIP_LAYERS="${KV_SKIP_LAYERS:-}"
+ATTN_BACKEND="${ATTN_BACKEND:-}"
+MNBT="${MNBT:-8192}"
+GMU="${GMU:-0.85}"
+MAX_SEQS="${MAX_SEQS:-4}"
+MM_CACHE_GB="${MM_CACHE_GB:-0.5}"
+
 SKIP_PULL=0 SKIP_DOWNLOAD=0 NO_START=0 FORCE=0
 usage() {
   cat <<'EOF'
@@ -221,6 +239,22 @@ write_env() { # write_env <target: head|worker>
 : "\${IMAGE:=$IMAGE}"
 : "\${PORT:=$PORT}"
 : "\${NFS_PORT:=$NFS_PORT}"
+: "\${MPORT:=$MPORT}"
+: "\${MAX_LEN:=$MAX_LEN}"
+: "\${SPEC:=$SPEC}"
+: "\${MTP:=$MTP}"
+: "\${DFLASH_TOKENS:=$DFLASH_TOKENS}"
+: "\${EAGER:=$EAGER}"
+: "\${SKIP_MM_PROFILING:=$SKIP_MM_PROFILING}"
+: "\${BLOCK_SIZE:=$BLOCK_SIZE}"
+: "\${KV_DTYPE:=$KV_DTYPE}"
+: "\${KV_CACHE_MEMORY:=$KV_CACHE_MEMORY}"
+: "\${KV_SKIP_LAYERS:=$KV_SKIP_LAYERS}"
+: "\${ATTN_BACKEND:=$ATTN_BACKEND}"
+: "\${MNBT:=$MNBT}"
+: "\${GMU:=$GMU}"
+: "\${MAX_SEQS:=$MAX_SEQS}"
+: "\${MM_CACHE_GB:=$MM_CACHE_GB}"
 EOF
 )
   if [ "$1" = head ]; then printf '%s\n' "$out" > "$HOME/.glm53-serve.env"

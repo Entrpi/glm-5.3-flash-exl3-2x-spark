@@ -128,6 +128,7 @@ EXTRA_ENVS=()
 # point at a built topk_fix.so inside the container to lift the 1M-declaration
 # and drafterless-524k persistent_topk oversubscription.
 [[ -n "${GLM53_TOPK_FIX_SO:-}" ]] && EXTRA_ENVS+=(-e "GLM53_TOPK_FIX_SO=$GLM53_TOPK_FIX_SO")
+[[ -n "${VLLM_EXL3_STANDARD_FUSED:-}" ]] && EXTRA_ENVS+=(-e "VLLM_EXL3_STANDARD_FUSED=$VLLM_EXL3_STANDARD_FUSED")
 if [[ "$WEIGHTS_MODE" == "local" || "$NODE_RANK" == "1" ]]; then
   test -f "$MODEL_HOST_PATH/config.json" || {
     echo "EXL3 weights not found at $MODEL_HOST_PATH (run install.sh, or set MODEL_HOST_PATH)" >&2
