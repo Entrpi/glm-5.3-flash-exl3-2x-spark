@@ -342,6 +342,42 @@ holds 2.05 banks. Floors during the 1M cold prefill: fp8 head
 0.85 GiB / worker 3.74 GiB (same MNBT-8192 caveat as above); at 499k
 on NVFP4, head 2.49 / worker 5.14 GiB — comfortable.
 
+## 14. spark-arena llama-benchy vs 4-Spark TP4 (2026-08-31)
+
+Full spark-arena methodology (llama-benchy, pp2048/tg128, depths to
+131,070, concurrency 1/2/5, 3 runs/cell) plus extra c1/c2 depth rows at
+262,144 and 524,288, on the native-1M NVFP4 profile with `MNBT=4096`
+and `MAX_SEQS=5`. Reference: leaderboard submission sub1788047509273 —
+4× Spark TP4, official FP8 weights, BF16 KV, eager, no speculation.
+The ~9.5 h sweep held a 5.37 GiB head-memory floor throughout —
+`MNBT=4096` is validated for concurrent traffic at the 1M declaration
+(§13's MNBT-8192 wedge does not reproduce at 4096).
+
+| metric (t/s total) | 2× GB10 (this kit) | 4× GB10 TP4 | per-node |
+|---|---:|---:|---|
+| pp2048 c1 | 962 | 1,104 | **481 vs 276 (+74%)** |
+| ctx_pp c1 @131k | 1,355 | 2,185 | **678 vs 546 (+24%)** |
+| ctx_pp c1 @262k / @524k | **1,335 / 1,275** | — | they cannot post these |
+| ctx_tg c1 (all depths) | 8.4–8.7 flat → **8.42 @524k** | 15.5–15.7 flat → 131k | 4.35 vs 3.88 (+12%) |
+| tg128 c1 | 8.80 | 14.50 | 4.40 vs 3.63 |
+| ctx_tg @131k c5 | 0.78 | 2.57 | prefill-wall-dominated metric; 2× aggregate prefill wins |
+
+Two readings to keep honest. First, absolute shallow decode goes to
+TP4: decode is bandwidth-bound and they have twice the hardware.
+Second, the decode rows measure llama-benchy's regime — *sampled*
+(server-default temperature) continuation of tiled book text — which
+collapses DFlash2 acceptance to 1.14/7 (vs 2.5/7 on prose, measured
+from the engine's spec counters over the whole run). The kit's 25–72
+tok/s serving numbers come from greedy/structured workloads and are not
+comparable to these cells; TP4 runs no speculation and is immune to the
+content effect. Our prefill-per-node lead and the 262k/524k rows —
+decode still flat at 8.4 with 524k resident — are the structural
+results. (A d524288×c5 cell was measured but oversubscribes the KV pool
+1.27× and reports admission-queueing, not throughput; excluded.)
+
+Raw table: the run's CSV ships in the results archive; the arena
+leaderboard accepts submissions only via its own CLI.
+
 ## Production recommendation
 
 Serve the GLM_NEXT lane (ratified default 2026-08-30):
