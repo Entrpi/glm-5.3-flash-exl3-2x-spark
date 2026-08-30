@@ -90,7 +90,8 @@ KV_CACHE_MEMORY="${KV_CACHE_MEMORY:-}"   # empty -> 12.4e9 (1,435,070 tokens
                                          # 13.4e9 gave 567k bf16 but collapsed
                                          # the floor to 2.26 GiB — do NOT raise
                                          # without re-measuring memory floors.
-MNBT="${MNBT:-8192}"                     # --max-num-batched-tokens: 112k-prompt
+MNBT="${MNBT:-8192}"
+LOAD_FORMAT="${LOAD_FORMAT:-}"  # instanttensor bypasses page cache (GB10 UMA fix)                     # --max-num-batched-tokens: 112k-prompt
                                          # TTFT 93s->54.7s vs engine default
 MM_CACHE_GB="${MM_CACHE_GB:-0.5}"        # mm processor cache (head-resident)
 GMU="${GMU:-0.85}"                       # gpu-memory-utilization; 0.88+ risks
@@ -212,6 +213,9 @@ mkdir -p "$CACHE_HOST_PATH" \
   "$CACHE_HOST_PATH/jit/b12x" "$CACHE_HOST_PATH/jit/vllm"
 docker rm -f "$NAME" 2>/dev/null || true
 
+LOAD_ARGS=()
+[[ -n "$LOAD_FORMAT" ]] && LOAD_ARGS+=(--load-format "$LOAD_FORMAT")
+
 # GB10 pre-launch ritual — a hot page cache at model-load time wedges the box
 # into swap (unified-memory starvation). Root via privileged docker; falls
 # back to passwordless sudo where available.
@@ -257,7 +261,7 @@ docker run --gpus all -d \
     --gpu-memory-utilization "$GMU" \
     --max-model-len "$MAX_LEN" \
     --max-num-seqs "$MAX_SEQS" --block-size "$BLOCK_SIZE" --mm-processor-cache-gb "$MM_CACHE_GB" \
-    "${MNBT_ARGS[@]}" "${SPEC_ARGS[@]}" "${KV_ARGS[@]}" \
+    "${LOAD_ARGS[@]}" "${MNBT_ARGS[@]}" "${SPEC_ARGS[@]}" "${KV_ARGS[@]}" \
     "${EAGER_ARGS[@]}" \
     --tool-call-parser glm47 --enable-auto-tool-choice \
     --reasoning-parser glm45 --default-chat-template-kwargs '{"enable_thinking": false}' \
