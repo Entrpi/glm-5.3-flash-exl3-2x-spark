@@ -114,6 +114,22 @@ ip -o addr show | grep -q "$HOST_IP/" || {
   exit 2
 }
 
+# RoCE GID index for the rail IP. Normally the RoCE v2 entry sits at index 3,
+# but the kernel can rebuild the GID table at a different slot after a link
+# flap (observed: a peer power-cycle left the v2 GID at index 4 with index 3
+# empty, and NCCL pinned to 3 failed QP setup with "remote GID ::"). Derive
+# the index from sysfs; NCCL_GID_INDEX overrides.
+if [[ -z "${NCCL_GID_INDEX:-}" ]]; then
+  _want=$(printf '0000:0000:0000:0000:0000:ffff:%02x%02x:%02x%02x' ${HOST_IP//./ })
+  for _g in "/sys/class/infiniband/$NCCL_HCA/ports/1/gids/"*; do
+    [[ "$(cat "$_g" 2>/dev/null)" == "$_want" ]] || continue
+    _idx="${_g##*/}"
+    [[ "$(cat "/sys/class/infiniband/$NCCL_HCA/ports/1/gid_attrs/types/$_idx" 2>/dev/null)" == *"v2"* ]] || continue
+    NCCL_GID_INDEX="$_idx"; break
+  done
+  NCCL_GID_INDEX="${NCCL_GID_INDEX:-3}"
+fi
+
 EXTRA_VOLS=()
 EXTRA_ENVS=()
 # Optional kernel-selection override (A/B tests without editing this script),
@@ -239,7 +255,7 @@ docker run --gpus all -d \
   -e FLASHINFER_DISABLE_VERSION_CHECK=1 \
   "${EXTRA_ENVS[@]}" \
   -e NCCL_NET=IB -e NCCL_IB_DISABLE=0 \
-  -e NCCL_IB_HCA="$NCCL_HCA" -e NCCL_IB_GID_INDEX=3 \
+  -e NCCL_IB_HCA="$NCCL_HCA" -e NCCL_IB_GID_INDEX="$NCCL_GID_INDEX" \
   -e NCCL_IB_ROCE_VERSION_NUM=2 -e NCCL_IB_ADDR_FAMILY=AF_INET \
   -e NCCL_IB_ADDR_RANGE="$NCCL_SUBNET" \
   -e NCCL_SOCKET_IFNAME="$NCCL_IF" -e GLOO_SOCKET_IFNAME="$NCCL_IF" \
@@ -265,4 +281,4 @@ docker run --gpus all -d \
     --master-addr "$HEAD_RAIL_IP" --master-port "$MPORT" \
     $HEADLESS
 
-echo "launched $NAME rank=$NODE_RANK host=$HOST_IP image=$IMAGE weights=$WEIGHTS_MODE kv=${KV_CACHE_MEMORY:-auto}${KV_DTYPE:+/$KV_DTYPE}${ATTN_BACKEND:+ attn=$ATTN_BACKEND} spec=${SPEC}${MTP:+ mtp=$MTP} mnbt=${MNBT:-default}"
+echo "launched $NAME rank=$NODE_RANK host=$HOST_IP gid=$NCCL_GID_INDEX image=$IMAGE weights=$WEIGHTS_MODE kv=${KV_CACHE_MEMORY:-auto}${KV_DTYPE:+/$KV_DTYPE}${ATTN_BACKEND:+ attn=$ATTN_BACKEND} spec=${SPEC}${MTP:+ mtp=$MTP} mnbt=${MNBT:-default}"
