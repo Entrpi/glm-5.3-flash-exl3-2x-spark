@@ -87,6 +87,7 @@ KV budget:
 | Configuration | KV pool (tokens) | Concurrency @max-len | Notes |
 |---|---:|---:|---|
 | **Native 1M: `MAX_LEN=1048576`, DFlash2 + `nvfp4_ds_mla` KV** | **2,144,814** | 2.05× | two concurrent full-length native-1M banks (FINDINGS §13); needs the NVFP4 lane + the `persistent_topk` fix (`GLM53_TOPK_FIX_SO` on the v1 image); ~15 min per cold 1M prefill, run with `MNBT=4096` |
+| Native 1M, DFlash2 + `fp8_ds_mla` KV | 1,530,144 | 1.46× | the default KV format also serves the full native declaration (topk fix required): one 1M bank plus ~480k spare; cold 1.03M prefill 1,251 tok/s, needle-exact |
 | 524k, DFlash2 + `nvfp4_ds_mla` KV | 1,702,584 | 3.25× | rope-less 304 B/token records with a dynamic per-token scale (`VLLM_NVFP4_MLA_DYNAMIC_SCALE=1`, no calibration file); quality between the two fp8 lanes (math 88, lavd 10 EXACT) |
 | **GLM_NEXT lane: 524k, DFlash2 + `fp8_ds_mla` KV** | **1,324,163** | 2.53× | ratified default 2026-08-30 (b12x 528 B/token packed records); on the `v1-dflash2` image it needs the hotfix overlays — becomes the baked default with the next image. Drafterless pool: 1,858,451 (the deficit vs the row below is entirely the draft ring-KV running bf16 under the skip mechanism) |
 | 524k, DFlash2 + `fp8_e4m3` KV | 1,435,070 | 2.74× | the 2026-08-29 default, fully supported on the shipped image; vLLM auto-bumps the KV block to 4608 for KDA/attention page parity |

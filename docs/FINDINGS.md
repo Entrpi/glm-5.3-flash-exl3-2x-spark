@@ -318,7 +318,29 @@ the fix into `_C`. First native-1M results on this hardware
   1M cold prefill** (worker 3.59 GiB) — under the 2.26 GiB line §10
   rejected. Run the 1M profile with `MNBT=4096` for activation
   headroom, or drop the KV budget; 12.4e9 + MNBT 8192 survived but
-  with no margin.
+  with no margin. This is not theoretical: a later concurrency-5
+  benchmark sweep on this profile at MNBT 8192 stacked five concurrent
+  chunked prefills and **hard-wedged the head box** (kernel-level UMA
+  exhaustion, power cycle required). MNBT=4096 is mandatory for any
+  concurrent traffic at the 1M declaration.
+
+**Depth-curve completion (cold prefill, tok/s, needle-exact at every
+cell):**
+
+| depth  | fp8_ds_mla | nvfp4_ds_mla |
+|--------|-----------:|-------------:|
+| 133k   | 1,490      | 1,389        |
+| 499k   | 1,277      | 1,364        |
+| 1.03M  | 1,251      | 1,134        |
+
+fp8 wins shallow, NVFP4 wins mid-depth (the 304 B record moves less
+KV per scored token, flattening the curve; crossover ≈200–350k), fp8
+retakes the lead at 1M. The default fp8_ds_mla lane also serves the
+native-1M declaration with the topk fix: **pool 1,530,144 tokens =
+1.46 × 1M banks** — one full 1M bank plus ~480k of spare, where NVFP4
+holds 2.05 banks. Floors during the 1M cold prefill: fp8 head
+0.85 GiB / worker 3.74 GiB (same MNBT-8192 caveat as above); at 499k
+on NVFP4, head 2.49 / worker 5.14 GiB — comfortable.
 
 ## Production recommendation
 
