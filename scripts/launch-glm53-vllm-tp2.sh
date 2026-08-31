@@ -99,15 +99,24 @@ GMU="${GMU:-0.85}"                       # gpu-memory-utilization; 0.88+ risks
                                          # unified-memory swap on GB10
 MAX_SEQS="${MAX_SEQS:-4}"                # 4 at the 524k default (2.74 banks);
                                          # 6 was the 131k-era value
-LOAD_FORMAT="${LOAD_FORMAT:-}"           # empty = engine default loader.
-                                         # instanttensor = safetensors load
+LOAD_FORMAT="${LOAD_FORMAT-instanttensor}"  # instanttensor (default,
+                                         # validated 2026-08-31): safetensors
                                          # via pipelined-prefetch direct I/O,
-                                         # bypassing the page cache — the fix
-                                         # if weight load OOMs
-                                         # (NV_ERR_NO_MEMORY) or swap-wedges
-                                         # near the end of shard load on GB10
-                                         # unified memory; keeps CUDA graphs
-                                         # + the fused EXL3 path.
+                                         # bypassing the page cache. Measured
+                                         # on the reference pair: model load
+                                         # 385.8s -> 43.1s, peak swap 32G ->
+                                         # 4G head / 16G -> 2.7G worker, pool
+                                         # + decode + prefill at parity.
+                                         # Sidesteps the swap OOM
+                                         # (NV_ERR_NO_MEMORY) entirely. Note
+                                         # ${VAR-}: explicit empty
+                                         # LOAD_FORMAT= selects the engine
+                                         # default loader (page-cache read;
+                                         # needs >=32G swap on the head).
+                                         # Expect a ~10-15 min post-boot
+                                         # settling window with mildly noisy
+                                         # TTFT while load-era pages fault
+                                         # back in.
 KDA_PREFILL="${KDA_PREFILL:-}"           # KDA prefill kernel for the 34 linear-
                                          # attention layers: triton | flashkda |
                                          # auto (flashkda when supported).
