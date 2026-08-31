@@ -289,7 +289,7 @@ start_server() {
     sleep 15
     docker ps --format '{{.Names}}' | grep -q '^vllm_glm53$' || {
       echo; docker logs vllm_glm53 2>&1 | tail -30
-      die "head container exited during boot (last log lines above). If it wedged or OOMed at ~90% of shard load, set LOAD_FORMAT=instanttensor in .env and re-run (or re-run with --nfs)."
+      die "head container exited during boot (last log lines above). If it wedged or OOMed at ~90% of shard load: grow swap to >=32 GiB on both boxes (stock 16 GiB is not enough — see README), or set LOAD_FORMAT=instanttensor in .env, then re-run."
     }
     elapsed=$(( $(date +%s) - t0 ))
     [ "$elapsed" -gt 1800 ] && die "API not up after 30 min — docker logs vllm_glm53"

@@ -38,13 +38,13 @@ MPORT="${MPORT:-29521}"
 #                      (containerized NFS, see install.sh) and the head mounts
 #                      a docker NFS volume. This is the topology the reference
 #                      kit runs in production (its head box lacks the disk).
-#   CAUTION (measured on the reference kit): a HEAD process reading the
-#   checkpoint from fast local NVMe can outrun GB10 unified-memory page-cache
-#   reclaim and wedge the box into swap at ~90% of shard load. local mode is
-#   the simpler default; if your head wedges or OOMs (NV_ERR_NO_MEMORY)
-#   during load, set LOAD_FORMAT=instanttensor (direct I/O sidesteps the
-#   reclaim race entirely) or re-run install.sh with --nfs. The drop-caches
-#   ritual below is required either way.
+#   CAUTION (measured on the reference pair 2026-08-31): weight load drives
+#   the head through ALL available swap in BOTH modes (full 32 GiB consumed,
+#   0.8 GiB MemFree floor; the worker pegs its 16 GiB). Stock 16 GiB swap
+#   OOMs the head at ~90% of shard load (NV_ERR_NO_MEMORY) — grow swap to
+#   >=32 GiB on both boxes, or set LOAD_FORMAT=instanttensor (direct I/O
+#   sidesteps the page cache entirely). --nfs does NOT pace the load on a
+#   fast rail. The drop-caches ritual below is still required.
 WEIGHTS_MODE="${WEIGHTS_MODE:-local}"
 MODEL_HOST_PATH="${MODEL_HOST_PATH:-$HOME/models/glm53-exl3}"
 DFLASH_DIR="${DFLASH_DIR:-$HOME/models/glm53-dflash2}"

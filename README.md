@@ -76,6 +76,7 @@ Variants:
 | Interconnect | direct 200GbE QSFP link (RoCE); NCCL runs on this rail |
 | Disk, default (local) mode | ~200 GiB free per box |
 | Disk, `--nfs` mode | ~200 GiB worker, ~30 GiB head |
+| Swap | **≥32 GiB on both boxes** (stock 16 GiB reliably OOMs the head at ~90% of weight load — see the swap note below) |
 | Software | Docker with GPU support on both; passwordless SSH head→worker |
 
 ## Memory and context
@@ -116,18 +117,31 @@ on the memory-binding box under saturation plus a 112k-token prefill.
 > ([tools/memlog.sh](tools/memlog.sh)) — floors also degrade 1.5–2 GiB per
 > day of workload, so fresh-boot numbers are optimistic.
 
-> In default (local-weights) mode the head loads the checkpoint from local
-> NVMe. On our reference kit, a head-side fast local read outran unified-
-> memory page-cache reclaim and wedged the box at ~90% of shard load — that
-> box now runs `--nfs` mode (weights on the worker, NFS-paced load), which
-> is the topology all production numbers here were measured on. If your head
-> wedges during load, re-run `./install.sh --nfs`.
+> **Swap is load-bearing on GB10 — the stock 16 GiB is not enough.**
+> During weight load the head consumes every byte of swap it has, in BOTH
+> local and `--nfs` modes (`--nfs` does not pace the load over a fast
+> rail). Measured on the reference pair (headless, minimal services,
+> 2 s sampling): the head peaked at its **full 32 GiB of swap with a
+> 0.8 GiB MemFree floor** in both modes, and even the worker pegged its
+> 16 GiB. With stock 16 GiB swap the head dies deterministically at
+> ~88–95% of shard load (`NV_ERR_NO_MEMORY` or an oom-kill) — reported
+> independently on three other pairs. Before first boot, grow swap on
+> **both** boxes:
+>
+> ```
+> sudo fallocate -l 32G /swap2 && sudo chmod 600 /swap2 && sudo mkswap /swap2 && sudo swapon /swap2
+> ```
+>
+> (add it to `/etc/fstab` to persist), or bypass the page cache entirely
+> with `LOAD_FORMAT=instanttensor` in `.env` — field-verified on three
+> community pairs, not yet part of the reference receipts. Both local and
+> `--nfs` topologies are fully measured working with 32 GiB swap.
 
 ### Startup time
 
-Worker joins in ~25 s; the head takes **~12–13 min** to API-up (NFS-paced
-weight load + engine init + CUDA-graph capture, including the drafter's own
-full graphs). `install.sh` then runs a ~20 s JIT shape warmup so the first
+Worker joins in ~25 s; the head takes **~7 min** to API-up with local
+weights (**~12–13 min** in `--nfs` mode) — weight load + engine init +
+CUDA-graph capture, including the drafter's own full graphs. `install.sh` then runs a ~20 s JIT shape warmup so the first
 real request doesn't pay ~7 s of lazy compilation. JIT caches persist across
 relaunches (`~/glm53-vllm-cache/jit`).
 
