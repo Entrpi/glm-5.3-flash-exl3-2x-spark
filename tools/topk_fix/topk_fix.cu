@@ -152,7 +152,7 @@ void launch_persistent_topk(const at::Tensor& logits, const at::Tensor& lengths,
     if (num_groups == 0) num_groups = 1;
     total_ctas = num_groups * ctas_per_group;
 
-    if (!(needs_cooperative && total_ctas > hw_resident_cap)) break;
+    if (!(needs_cooperative && total_ctas >= hw_resident_cap)) break;  // >=: zero-spare-slot launches count as oversubscribed (straggler deadlock)
     if (effective_max_smem < max_smem_per_block) {
       effective_max_smem = max_smem_per_block;
       continue;
@@ -162,7 +162,7 @@ void launch_persistent_topk(const at::Tensor& logits, const at::Tensor& lengths,
 
   // No FilteredTopK in this mini-build (it needs >=128KB smem, which the
   // sm121 target this extension exists for does not have). Fail loudly.
-  TORCH_CHECK(!(needs_cooperative && total_ctas > hw_resident_cap),
+  TORCH_CHECK(!(needs_cooperative && total_ctas >= hw_resident_cap),
               "topk_fix.persistent_topk would oversubscribe even at full "
               "smem: total_ctas=",
               total_ctas, " > num_sms*occupancy=", hw_resident_cap,
