@@ -208,13 +208,35 @@ pull_image() {
     log "pulling $IMAGE (~25 GiB on first pull)"
     docker pull "$IMAGE" || die "docker pull failed — check network/GHCR status"
   fi
-  local head_id worker_id
-  head_id=$(docker image inspect --format '{{.Id}}' "$IMAGE")
-  worker_id=$(WSSH "docker image inspect --format '{{.Id}}' '$IMAGE' 2>/dev/null" || true)
-  if [ "$head_id" != "$worker_id" ]; then
-    log "shipping image to worker (docker save | ssh docker load, ~25 GiB)"
-    docker save "$IMAGE" | WSSH docker load || die "image ship to worker failed"
+  # Compare content digests (RepoDigests), not store-local .Id: the
+  # containerd image store assigns multi-arch images different .Ids for
+  # identical content, which forced pointless ~25 GiB ships.
+  local head_dig worker_dig head_id worker_id
+  head_dig=$(docker image inspect --format '{{join .RepoDigests ","}}' "$IMAGE" 2>/dev/null || true)
+  worker_dig=$(WSSH "docker image inspect --format '{{join .RepoDigests \",\"}}' '$IMAGE' 2>/dev/null" || true)
+  if [ -n "$head_dig" ] && [ "$head_dig" = "$worker_dig" ]; then
+    ok "image on both boxes: $IMAGE"
+    return
   fi
+  if [ -z "$head_dig" ]; then
+    # Locally built image (no registry digest): fall back to store .Id.
+    head_id=$(docker image inspect --format '{{.Id}}' "$IMAGE")
+    worker_id=$(WSSH "docker image inspect --format '{{.Id}}' '$IMAGE' 2>/dev/null" || true)
+    if [ "$head_id" = "$worker_id" ]; then
+      ok "image on both boxes: $IMAGE"
+      return
+    fi
+  fi
+  # Worker pulls directly first: docker save|load of a containerd-store
+  # multi-arch OCI image can fail or ship the wrong platform (issue #8);
+  # a registry pull always resolves the right one.
+  log "image missing/stale on worker — trying a direct pull there"
+  if WSSH "docker pull '$IMAGE'" >/dev/null 2>&1; then
+    ok "image on both boxes: $IMAGE (worker pulled directly)"
+    return
+  fi
+  log "worker pull failed; shipping image (docker save | ssh docker load, ~25 GiB)"
+  docker save "$IMAGE" | WSSH docker load || die "image ship to worker failed"
   ok "image on both boxes: $IMAGE"
 }
 
@@ -331,7 +353,7 @@ start_server() {
   sleep 30
   log "launching head (rank 0); weight load + engine init takes ~13 min"
   "$HOME/launch-glm53-vllm-tp2.sh" 0 || die "head launch failed"
-  local t0 elapsed
+  local t0 elapsed worker_strikes=0
   t0=$(date +%s)
   until curl -sf -m5 "http://localhost:$PORT/v1/models" >/dev/null 2>&1; do
     sleep 15
@@ -339,6 +361,18 @@ start_server() {
       echo; docker logs vllm_glm53 2>&1 | tail -30
       die "head container exited during boot (last log lines above). If it wedged or OOMed at ~90% of shard load: grow swap to >=32 GiB on both boxes (stock 16 GiB is not enough — see README), or set LOAD_FORMAT=instanttensor in .env, then re-run."
     }
+    # A dead worker otherwise burns the full 30-min timeout while the head
+    # waits on rendezvous. 3 consecutive strikes so one flaky ssh probe
+    # can't kill a healthy boot.
+    if WSSH "docker ps --format '{{.Names}}' | grep -q '^vllm_glm53\$'" >/dev/null 2>&1; then
+      worker_strikes=0
+    else
+      worker_strikes=$(( worker_strikes + 1 ))
+      if [ "$worker_strikes" -ge 3 ]; then
+        echo; WSSH "docker logs vllm_glm53 2>&1 | tail -30" || true
+        die "worker container is gone during boot (last worker log lines above, if any). Fix the worker, then re-run."
+      fi
+    fi
     elapsed=$(( $(date +%s) - t0 ))
     [ "$elapsed" -gt 1800 ] && die "API not up after 30 min — docker logs vllm_glm53"
   done
