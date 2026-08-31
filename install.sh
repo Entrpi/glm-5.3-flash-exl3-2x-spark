@@ -18,7 +18,8 @@
 #
 # The script makes NO changes outside of:
 #   - the docker image/volume/container namespace (image, vllm_glm53,
-#     nfs-exl3 in --nfs mode, exl3weights volume)
+#     nfs-exl3 + the worker-built glm53-nfs-server:kit image in --nfs mode,
+#     exl3weights volume)
 #   - $MODEL_HOST_PATH, $DFLASH_DIR, $HOME/glm53-vllm-cache (both boxes)
 #   - $HOME/.glm53-serve.env, $HOME/launch-glm53-vllm-tp2.sh,
 #     $HOME/glm53-warmup.sh (both boxes)
@@ -53,6 +54,12 @@ EXL3_REPO_FALLBACK="${EXL3_REPO_FALLBACK:-Mia-AiLab/GLM-5.3-Flash-EXL3-TR3-4bpw}
 DFLASH_REPO="${DFLASH_REPO:-incoai/GLM-5.3-Flash-DFlash2}"
 IMAGE="${IMAGE:-ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v1-dflash2}"
 NFS_PORT="${NFS_PORT:-12049}"
+# --nfs mode export server image. Default: the kit's own minimal NFSv4-only
+# image (nfs/Dockerfile), built natively ON the worker at install time —
+# published NFS server images are amd64-only and crash-loop on the aarch64
+# Spark unless qemu binfmt happens to be registered (issue #1). Override to
+# run a prebuilt image instead (skips the build).
+NFS_IMAGE="${NFS_IMAGE:-glm53-nfs-server:kit}"
 PORT="${PORT:-8000}"
 
 # Serving knobs (per-knob rationale in scripts/launch-glm53-vllm-tp2.sh).
@@ -207,8 +214,20 @@ download_models() {
         || die "EXL3 download failed from both $EXL3_REPO and $EXL3_REPO_FALLBACK"
     fi
     log "ensuring containerized NFS export on the worker (port $NFS_PORT)"
-    WSSH "docker ps --format '{{.Names}}' | grep -q '^nfs-exl3\$'" || WSSH "docker rm -f nfs-exl3 2>/dev/null; docker run -d --name nfs-exl3 --restart unless-stopped --privileged -p $NFS_PORT:2049 -v '$MODEL_HOST_PATH:/export/glm53-exl3:ro' -v /lib/modules:/lib/modules:ro -e NFS_EXPORT_0='/export/glm53-exl3 *(ro,no_subtree_check,fsid=0,insecure)' erichough/nfs-server" \
-      || die "NFS export container failed on the worker"
+    if ! WSSH "docker ps --format '{{.Names}}' | grep -q '^nfs-exl3\$'"; then
+      if [ "$NFS_IMAGE" = "glm53-nfs-server:kit" ]; then
+        log "building the kit's NFSv4 server image on the worker (native arch)"
+        tar -c -C "$SCRIPT_DIR/nfs" . | WSSH "docker build -q -t '$NFS_IMAGE' -" >/dev/null \
+          || die "NFS server image build failed on the worker"
+      fi
+      WSSH "docker rm -f nfs-exl3 2>/dev/null; docker run -d --name nfs-exl3 --restart unless-stopped --privileged -p $NFS_PORT:2049 -v '$MODEL_HOST_PATH:/export/glm53-exl3:ro' -v /lib/modules:/lib/modules:ro -e NFS_EXPORT_0='/export/glm53-exl3 *(ro,no_subtree_check,fsid=0,insecure)' '$NFS_IMAGE'" \
+        || die "NFS export container failed on the worker"
+      sleep 3
+      WSSH "docker ps --format '{{.Names}}' | grep -q '^nfs-exl3\$'" || {
+        WSSH "docker logs nfs-exl3 2>&1 | tail -8" || true
+        die "NFS export container is not running (last logs above; amd64-only image on aarch64? see issue #1)"
+      }
+    fi
   fi
   ok "weights in place ($WEIGHTS_MODE mode)"
 }
