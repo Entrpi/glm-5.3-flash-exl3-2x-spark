@@ -130,6 +130,17 @@ elif [[ -z "$KV_CACHE_MEMORY" ]]; then
   KV_CACHE_MEMORY="12400000000"
 fi
 
+# Validate numeric knobs BEFORE any teardown: a typo'd value must not
+# take down a healthy cluster only for vllm to refuse the relaunch.
+_num_err() { echo "config error: $1 (nothing torn down)" >&2; exit 2; }
+[[ "$GMU" =~ ^0\.[0-9]+$|^1(\.0+)?$ ]] || _num_err "GMU='$GMU' must be in (0,1]"
+[[ "$MAX_LEN" =~ ^[1-9][0-9]*$ && "$MAX_LEN" -le 1048576 ]] \
+  || _num_err "MAX_LEN='$MAX_LEN' must be a positive int <= 1048576"
+[[ "$MAX_SEQS" =~ ^[1-9][0-9]*$ && "$MAX_SEQS" -le 256 ]] \
+  || _num_err "MAX_SEQS='$MAX_SEQS' must be a positive int <= 256"
+[[ -z "$MNBT" || ( "$MNBT" =~ ^[1-9][0-9]*$ && "$MNBT" -le 131072 ) ]] \
+  || _num_err "MNBT='$MNBT' must be empty or a positive int <= 131072"
+
 case "$NODE_RANK" in
   0) HOST_IP="$HEAD_RAIL_IP"; HEADLESS="" ;;
   1) HOST_IP="$WORKER_RAIL_IP"; HEADLESS="--headless" ;;
@@ -152,7 +163,19 @@ if [[ -z "${NCCL_GID_INDEX:-}" ]]; then
     [[ "$(cat "/sys/class/infiniband/$NCCL_HCA/ports/1/gid_attrs/types/$_idx" 2>/dev/null)" == *"v2"* ]] || continue
     NCCL_GID_INDEX="$_idx"; break
   done
-  NCCL_GID_INDEX="${NCCL_GID_INDEX:-3}"
+  if [[ -z "${NCCL_GID_INDEX:-}" ]]; then
+    # Fail fast: a wrong index dies ~60s later in NCCL QP setup with an
+    # opaque "remote GID ::". Dump the table so the fix is obvious.
+    echo "error: no RoCE v2 GID matching $HOST_IP on $NCCL_HCA; table:" >&2
+    for _g in "/sys/class/infiniband/$NCCL_HCA/ports/1/gids/"*; do
+      _idx="${_g##*/}"
+      echo "  gid $_idx: $(cat "$_g" 2>/dev/null) type=$(cat \
+        "/sys/class/infiniband/$NCCL_HCA/ports/1/gid_attrs/types/$_idx" \
+        2>/dev/null)" >&2
+    done
+    echo "override with NCCL_GID_INDEX=<idx> if the table disagrees" >&2
+    exit 2
+  fi
 fi
 
 EXTRA_VOLS=()
