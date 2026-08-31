@@ -108,6 +108,11 @@ LOAD_FORMAT="${LOAD_FORMAT:-}"           # empty = engine default loader.
                                          # near the end of shard load on GB10
                                          # unified memory; keeps CUDA graphs
                                          # + the fused EXL3 path.
+KDA_PREFILL="${KDA_PREFILL:-}"           # KDA prefill kernel for the 34 linear-
+                                         # attention layers: triton | flashkda |
+                                         # auto (flashkda when supported).
+                                         # Empty = engine default. Pass the SAME
+                                         # value on both ranks.
 CACHE_HOST_PATH="${CACHE_HOST_PATH:-$HOME/glm53-vllm-cache}"
 
 if [[ "$KV_CACHE_MEMORY" == "auto" ]]; then
@@ -183,6 +188,12 @@ elif [[ "$SPEC" == "dflash" ]]; then
   EXTRA_VOLS+=(-v "$DFLASH_DIR:/models/glm53-dflash2:ro")
   SPEC_ARGS=(--speculative-config "{\"method\":\"dflash\",\"model\":\"/models/glm53-dflash2\",\"num_speculative_tokens\":$DFLASH_TOKENS}")
 fi
+KDA_ARGS=()
+[[ -n "$KDA_PREFILL" ]] && KDA_ARGS=(--kda-prefill-backend "$KDA_PREFILL")
+# Prefix-cache hash granularity override (e.g. 2304; default = GCD of the
+# cache groups' block sizes, which resolves to 4608 on this stack).
+PREFIX_MATCH_UNIT="${PREFIX_MATCH_UNIT:-}"
+[[ -n "$PREFIX_MATCH_UNIT" ]] && KDA_ARGS+=(--prefix-match-unit "$PREFIX_MATCH_UNIT")
 KV_ARGS=()
 [[ -n "$KV_DTYPE" ]] && KV_ARGS+=(--kv-cache-dtype "$KV_DTYPE")
 # Explicit attention backend (e.g. ATTN_BACKEND=B12X_MLA_SPARSE for the
@@ -289,6 +300,7 @@ docker run --gpus all -d \
     --max-model-len "$MAX_LEN" \
     --max-num-seqs "$MAX_SEQS" --block-size "$BLOCK_SIZE" --mm-processor-cache-gb "$MM_CACHE_GB" \
     "${LOAD_ARGS[@]}" "${MNBT_ARGS[@]}" "${SPEC_ARGS[@]}" "${KV_ARGS[@]}" \
+    "${KDA_ARGS[@]}" \
     "${EAGER_ARGS[@]}" \
     --tool-call-parser glm47 --enable-auto-tool-choice \
     --reasoning-parser glm45 --default-chat-template-kwargs '{"enable_thinking": false}' \
@@ -297,4 +309,4 @@ docker run --gpus all -d \
     --master-addr "$HEAD_RAIL_IP" --master-port "$MPORT" \
     $HEADLESS
 
-echo "launched $NAME rank=$NODE_RANK host=$HOST_IP gid=$NCCL_GID_INDEX image=$IMAGE weights=$WEIGHTS_MODE kv=${KV_CACHE_MEMORY:-auto}${KV_DTYPE:+/$KV_DTYPE}${ATTN_BACKEND:+ attn=$ATTN_BACKEND} spec=${SPEC}${MTP:+ mtp=$MTP} mnbt=${MNBT:-default}"
+echo "launched $NAME rank=$NODE_RANK host=$HOST_IP gid=$NCCL_GID_INDEX image=$IMAGE weights=$WEIGHTS_MODE kv=${KV_CACHE_MEMORY:-auto}${KV_DTYPE:+/$KV_DTYPE}${ATTN_BACKEND:+ attn=$ATTN_BACKEND} spec=${SPEC}${MTP:+ mtp=$MTP} mnbt=${MNBT:-default}${KDA_PREFILL:+ kda=$KDA_PREFILL}"
