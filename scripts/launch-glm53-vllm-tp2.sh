@@ -41,8 +41,10 @@ MPORT="${MPORT:-29521}"
 #   CAUTION (measured on the reference kit): a HEAD process reading the
 #   checkpoint from fast local NVMe can outrun GB10 unified-memory page-cache
 #   reclaim and wedge the box into swap at ~90% of shard load. local mode is
-#   the simpler default; if your head wedges during load, re-run install.sh
-#   with --nfs. The drop-caches ritual below is required either way.
+#   the simpler default; if your head wedges or OOMs (NV_ERR_NO_MEMORY)
+#   during load, set LOAD_FORMAT=instanttensor (direct I/O sidesteps the
+#   reclaim race entirely) or re-run install.sh with --nfs. The drop-caches
+#   ritual below is required either way.
 WEIGHTS_MODE="${WEIGHTS_MODE:-local}"
 MODEL_HOST_PATH="${MODEL_HOST_PATH:-$HOME/models/glm53-exl3}"
 DFLASH_DIR="${DFLASH_DIR:-$HOME/models/glm53-dflash2}"
@@ -97,6 +99,15 @@ GMU="${GMU:-0.85}"                       # gpu-memory-utilization; 0.88+ risks
                                          # unified-memory swap on GB10
 MAX_SEQS="${MAX_SEQS:-4}"                # 4 at the 524k default (2.74 banks);
                                          # 6 was the 131k-era value
+LOAD_FORMAT="${LOAD_FORMAT:-}"           # empty = engine default loader.
+                                         # instanttensor = safetensors load
+                                         # via pipelined-prefetch direct I/O,
+                                         # bypassing the page cache — the fix
+                                         # if weight load OOMs
+                                         # (NV_ERR_NO_MEMORY) or swap-wedges
+                                         # near the end of shard load on GB10
+                                         # unified memory; keeps CUDA graphs
+                                         # + the fused EXL3 path.
 CACHE_HOST_PATH="${CACHE_HOST_PATH:-$HOME/glm53-vllm-cache}"
 
 if [[ "$KV_CACHE_MEMORY" == "auto" ]]; then
@@ -144,6 +155,9 @@ EXTRA_ENVS=()
 # point at a built topk_fix.so inside the container to lift the 1M-declaration
 # and drafterless-524k persistent_topk oversubscription.
 [[ -n "${GLM53_TOPK_FIX_SO:-}" ]] && EXTRA_ENVS+=(-e "GLM53_TOPK_FIX_SO=$GLM53_TOPK_FIX_SO")
+# EXL3 loader override: VLLM_EXL3_STANDARD_FUSED=0 falls back to the
+# per-expert parity load path (slow load, ~6 tok/s decode — debugging only).
+[[ -n "${VLLM_EXL3_STANDARD_FUSED:-}" ]] && EXTRA_ENVS+=(-e "VLLM_EXL3_STANDARD_FUSED=$VLLM_EXL3_STANDARD_FUSED")
 if [[ "$WEIGHTS_MODE" == "local" || "$NODE_RANK" == "1" ]]; then
   test -f "$MODEL_HOST_PATH/config.json" || {
     echo "EXL3 weights not found at $MODEL_HOST_PATH (run install.sh, or set MODEL_HOST_PATH)" >&2
@@ -189,6 +203,8 @@ EAGER_ARGS=()
 [[ "$SKIP_MM_PROFILING" != "0" ]] && EAGER_ARGS+=(--skip-mm-profiling)
 MNBT_ARGS=()
 [[ -n "$MNBT" ]] && MNBT_ARGS=(--max-num-batched-tokens "$MNBT")
+LOAD_ARGS=()
+[[ -n "$LOAD_FORMAT" ]] && LOAD_ARGS=(--load-format "$LOAD_FORMAT")
 
 # Hotfix hooks: any file under $HOME/glm53-hotfix (mirroring the vllm package
 # tree) or $HOME/glm53-hotfix-fi (flashinfer tree) is bind-mounted over the
@@ -272,7 +288,7 @@ docker run --gpus all -d \
     --gpu-memory-utilization "$GMU" \
     --max-model-len "$MAX_LEN" \
     --max-num-seqs "$MAX_SEQS" --block-size "$BLOCK_SIZE" --mm-processor-cache-gb "$MM_CACHE_GB" \
-    "${MNBT_ARGS[@]}" "${SPEC_ARGS[@]}" "${KV_ARGS[@]}" \
+    "${LOAD_ARGS[@]}" "${MNBT_ARGS[@]}" "${SPEC_ARGS[@]}" "${KV_ARGS[@]}" \
     "${EAGER_ARGS[@]}" \
     --tool-call-parser glm47 --enable-auto-tool-choice \
     --reasoning-parser glm45 --default-chat-template-kwargs '{"enable_thinking": false}' \

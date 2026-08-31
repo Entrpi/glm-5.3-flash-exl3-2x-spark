@@ -55,6 +55,15 @@ IMAGE="${IMAGE:-ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v1-dflash2}"
 NFS_PORT="${NFS_PORT:-12049}"
 PORT="${PORT:-8000}"
 
+# Serving knobs (per-knob rationale in scripts/launch-glm53-vllm-tp2.sh).
+# write_env forwards a knob into ~/.glm53-serve.env ONLY when the user set it
+# (.env or environment) — unset knobs stay out of the file, so the launcher's
+# validated defaults remain the single source of truth across kit upgrades.
+SERVE_KNOBS=(MPORT MAX_LEN SPEC MTP DFLASH_TOKENS EAGER SKIP_MM_PROFILING
+  BLOCK_SIZE KV_DTYPE KV_CACHE_MEMORY KV_SKIP_LAYERS ATTN_BACKEND MNBT GMU
+  MAX_SEQS MM_CACHE_GB LOAD_FORMAT CACHE_HOST_PATH VLLM_EXL3_STANDARD_FUSED
+  VLLM_NVFP4_MLA_DYNAMIC_SCALE VLLM_DISABLED_KERNELS GLM53_TOPK_FIX_SO)
+
 SKIP_PULL=0 SKIP_DOWNLOAD=0 NO_START=0 FORCE=0
 usage() {
   cat <<'EOF'
@@ -206,7 +215,7 @@ download_models() {
 
 # ---------- §4 per-box scripts + serve config --------------------------------
 write_env() { # write_env <target: head|worker>
-  local nccl_if nccl_hca out
+  local nccl_if nccl_hca out k
   if [ "$1" = head ]; then nccl_if=$HEAD_NCCL_IF; nccl_hca=$HEAD_NCCL_HCA; else nccl_if=$WORKER_NCCL_IF; nccl_hca=$WORKER_NCCL_HCA; fi
   out=$(cat <<EOF
 # Written by install.sh $(date -u +%Y-%m-%dT%H:%MZ) — command-line env wins.
@@ -223,6 +232,13 @@ write_env() { # write_env <target: head|worker>
 : "\${NFS_PORT:=$NFS_PORT}"
 EOF
 )
+  # User-set serving knobs only (see SERVE_KNOBS). No-colon `=` (not `:=`):
+  # a deliberately EMPTY value (e.g. KV_DTYPE= -> bf16) survives the write,
+  # and launch-time env still overrides either way.
+  for k in "${SERVE_KNOBS[@]}"; do
+    [ -n "${!k+x}" ] && out="$out
+: \"\${$k=${!k}}\""
+  done
   if [ "$1" = head ]; then printf '%s\n' "$out" > "$HOME/.glm53-serve.env"
   else printf '%s\n' "$out" | WSSH "cat > \$HOME/.glm53-serve.env"; fi
 }
@@ -254,7 +270,7 @@ start_server() {
     sleep 15
     docker ps --format '{{.Names}}' | grep -q '^vllm_glm53$' || {
       echo; docker logs vllm_glm53 2>&1 | tail -30
-      die "head container exited during boot (last log lines above). If it wedged at ~90% of shard load in local mode, re-run with --nfs."
+      die "head container exited during boot (last log lines above). If it wedged or OOMed at ~90% of shard load, set LOAD_FORMAT=instanttensor in .env and re-run (or re-run with --nfs)."
     }
     elapsed=$(( $(date +%s) - t0 ))
     [ "$elapsed" -gt 1800 ] && die "API not up after 30 min — docker logs vllm_glm53"
