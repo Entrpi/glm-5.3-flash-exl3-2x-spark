@@ -129,10 +129,11 @@ on the memory-binding box under saturation plus a 112k-token prefill.
 > **both** boxes:
 >
 > ```
-> sudo fallocate -l 32G /swap2 && sudo chmod 600 /swap2 && sudo mkswap /swap2 && sudo swapon /swap2
+> sudo fallocate -l 32G /swap-glm53 && sudo chmod 600 /swap-glm53 && sudo mkswap /swap-glm53 && sudo swapon /swap-glm53
 > ```
 >
-> (add it to `/etc/fstab` to persist), or bypass the page cache entirely
+> (add it to `/etc/fstab` to persist — `install.sh` checks both boxes and
+> offers to do this for you), or bypass the page cache entirely
 > with `LOAD_FORMAT=instanttensor` in `.env` — field-verified on three
 > community pairs, not yet part of the reference receipts. Both local and
 > `--nfs` topologies are fully measured working with 32 GiB swap.

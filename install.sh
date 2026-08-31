@@ -135,6 +135,26 @@ hw_check() { # hw_check <where> <runner...>
 }
 disk_free_g() { df -BG --output=avail "$1" 2>/dev/null | tail -1 | tr -dc 0-9; }
 
+# Swap surgery: 32G swapfile + fstab persistence. Deliberately quote-free so
+# it survives the WSSH "sudo -n bash -c '...'" nesting.
+SWAP_FIX_CMD='test -f /swap-glm53 || (fallocate -l 32G /swap-glm53 && chmod 600 /swap-glm53 && mkswap /swap-glm53); swapon /swap-glm53 2>/dev/null; grep -q /swap-glm53 /etc/fstab || echo /swap-glm53 none swap sw 0 0 >> /etc/fstab'
+grow_swap() {
+  if [ "${SWAP_HEAD:-0}" -lt 30 ]; then
+    log "growing swap on the head (sudo may prompt for your password)"
+    sudo bash -c "$SWAP_FIX_CMD" \
+      && ok "head SwapTotal now $(awk '/^SwapTotal/{print int($2/1048576)}' /proc/meminfo)G" \
+      || warn "head swap surgery failed — run manually: sudo bash -c '$SWAP_FIX_CMD'"
+  fi
+  if [ "${SWAP_WORKER:-0}" -lt 30 ]; then
+    log "growing swap on the worker (needs passwordless sudo over SSH)"
+    if WSSH "sudo -n bash -c '$SWAP_FIX_CMD'" >/dev/null 2>&1; then
+      ok "worker SwapTotal now $(WSSH "awk '/^SwapTotal/{print int(\$2/1048576)}' /proc/meminfo")G"
+    else
+      warn "worker swap surgery failed (no passwordless sudo?) — run ON THE WORKER: sudo bash -c '$SWAP_FIX_CMD'"
+    fi
+  fi
+}
+
 verify_hosts() {
   log "verifying head"
   hw_check head bash -c
@@ -149,6 +169,34 @@ verify_hosts() {
   free_head=$(disk_free_g "$HOME"); free_worker=$(WSSH "df -BG --output=avail \$HOME | tail -1 | tr -dc 0-9")
   [ "${free_head:-0}" -ge "$need_head" ] || die "head needs ~${need_head}G free in \$HOME (has ${free_head:-?}G)"
   [ "${free_worker:-0}" -ge "$need_worker" ] || die "worker needs ~${need_worker}G free in \$HOME (has ${free_worker:-?}G)"
+  # Swap prerequisite (measured 2026-08-31): weight load consumes ALL
+  # available swap on the head in BOTH weights modes (reference pair: full
+  # 32 GiB used, 0.8 GiB MemFree floor; even the worker pegs its 16 GiB).
+  # Stock 16 GiB OOMs the head at ~90% of shard load (NV_ERR_NO_MEMORY).
+  SWAP_HEAD=$(awk '/^SwapTotal/{print int($2/1048576)}' /proc/meminfo)
+  SWAP_WORKER=$(WSSH "awk '/^SwapTotal/{print int(\$2/1048576)}' /proc/meminfo" 2>/dev/null || echo 0)
+  local swap_short=""
+  [ "${SWAP_HEAD:-0}" -ge 30 ] || swap_short="head(${SWAP_HEAD}G)"
+  [ "${SWAP_WORKER:-0}" -ge 30 ] || swap_short="$swap_short worker(${SWAP_WORKER}G)"
+  if [ -n "$swap_short" ] && [ "${LOAD_FORMAT:-}" != "instanttensor" ]; then
+    warn "INSUFFICIENT SWAP:$swap_short — need >=32G per box."
+    warn "Weight load consumes ALL available swap (measured: the reference pair's"
+    warn "full 32 GiB, in both local and --nfs modes). With stock 16 GiB the head"
+    warn "dies deterministically at ~90% of shard load (NV_ERR_NO_MEMORY)."
+    warn "Alternative: LOAD_FORMAT=instanttensor in .env bypasses the page cache."
+    if [ -t 0 ]; then
+      read -r -p "Grow swap now: 32G /swap-glm53 via sudo ([y]es / [c]ontinue anyway / [A]bort)? " ans
+      case "$ans" in
+        y|Y) grow_swap ;;
+        c|C) warn "continuing with insufficient swap — expect the head to die during weight load" ;;
+        *) die "aborted — grow swap or set LOAD_FORMAT=instanttensor, then re-run" ;;
+      esac
+    elif [ "$FORCE" = 1 ]; then
+      warn "continuing (--force) with insufficient swap — expect the head to die during weight load"
+    else
+      die "insufficient swap (details above). Grow swap, set LOAD_FORMAT=instanttensor in .env, or re-run with --force"
+    fi
+  fi
   ok "hosts verified"
 }
 
