@@ -53,7 +53,7 @@ VOL_NAME="${VOL_NAME:-exl3weights}"
 MODEL_PATH="/models/glm53-exl3"
 
 # ---- serving knobs (defaults = the validated production configuration) -----
-IMAGE="${IMAGE:-ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v1-dflash2}"
+IMAGE="${IMAGE:-ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v2-glmnext}"
 NAME="${NAME:-vllm_glm53}"
 MAX_LEN="${MAX_LEN:-524288}"             # 500k default bank (2026-08-29);
                                          # 131072 was the pre-long-context
@@ -75,15 +75,17 @@ BLOCK_SIZE="${BLOCK_SIZE:-2304}"         # KV block; with fp8 KV vLLM auto-bumps
                                          # to 4608"). 2304 is the bf16 parity
                                          # point; must satisfy
                                          # block %% (index_kpool*64).
-KV_DTYPE="${KV_DTYPE-fp8_e4m3}"          # fp8_e4m3 (default 2026-08-29):
+KV_DTYPE="${KV_DTYPE-fp8_ds_mla}"        # fp8_ds_mla (GLM_NEXT lane, baked
+                                         # default since the v2 image): 528
+                                         # B/token packed records, pool
+                                         # 1,324,163 @524k = 2.53 banks;
+                                         # math_500 91/100, lavd 15 EXACT.
                                          # NOTE ${VAR-} not ${VAR:-}: an
                                          # explicitly EMPTY KV_DTYPE= selects
                                          # bf16; only unset gets the default.
-                                         # 1,435,070-token pool @524k = 2.74
-                                         # full banks; estonia 9/10, lavd
-                                         # parity, math_500 88.0% pooled n=250
-                                         # (bf16: 94%). empty = bf16: highest
-                                         # math quality, pool ~520k tokens —
+                                         # fp8_e4m3 = the 2026-08-29 lane
+                                         # (1,435,070-token pool, 2.74 banks).
+                                         # empty = bf16: pool ~520k tokens —
                                          # pair with MAX_LEN=131072.
 KV_CACHE_MEMORY="${KV_CACHE_MEMORY:-}"   # empty -> 12.4e9 (1,435,070 tokens
                                          # @524k fp8 / 520,470 @131k bf16;
@@ -242,17 +244,19 @@ MIXED_PREFILL_MAX_DEFER="${MIXED_PREFILL_MAX_DEFER:-}"
   && KDA_ARGS+=(--mixed-prefill-max-defer-steps "$MIXED_PREFILL_MAX_DEFER")
 KV_ARGS=()
 [[ -n "$KV_DTYPE" ]] && KV_ARGS+=(--kv-cache-dtype "$KV_DTYPE")
-# Explicit attention backend (e.g. ATTN_BACKEND=B12X_MLA_SPARSE for the
-# GLM_NEXT 528 B/token lane, which also needs KV_DTYPE=fp8_ds_mla). Empty =
-# the fork's auto-selection (FLASHINFER_MLA_SPARSE_SM90 on these boxes).
-ATTN_BACKEND="${ATTN_BACKEND:-}"
+# Attention backend. B12X_MLA_SPARSE (GLM_NEXT lane, baked default since the
+# v2 image) pairs with KV_DTYPE=fp8_ds_mla. Explicitly EMPTY ATTN_BACKEND=
+# restores the fork's auto-selection (FLASHINFER_MLA_SPARSE_SM90 on these
+# boxes) — pair with a non-GLM_NEXT KV_DTYPE.
+ATTN_BACKEND="${ATTN_BACKEND-B12X_MLA_SPARSE}"
 [[ -n "$ATTN_BACKEND" ]] && KV_ARGS+=(--attention-backend "$ATTN_BACKEND")
 # Layers exempt from KV quantization. The GLM_NEXT fp8_ds_mla lane needs the
 # DFlash2 draft ring-KV layers on bf16 (the packed 528 B record is
-# target-MLA-only): use KV_SKIP_LAYERS=sliding_window — the draft ring is
-# sliding-window-typed, and the single token avoids the CLI's list parsing
-# (a comma-joined index string arrives as one unmatched element).
-KV_SKIP_LAYERS="${KV_SKIP_LAYERS:-}"
+# target-MLA-only): sliding_window (default with the lane) — the draft ring
+# is sliding-window-typed, and the single token avoids the CLI's list
+# parsing (a comma-joined index string arrives as one unmatched element).
+# Explicitly EMPTY KV_SKIP_LAYERS= disables the exemption (non-lane KV).
+KV_SKIP_LAYERS="${KV_SKIP_LAYERS-sliding_window}"
 [[ -n "$KV_SKIP_LAYERS" ]] && KV_ARGS+=(--kv-cache-dtype-skip-layers "$KV_SKIP_LAYERS")
 [[ -n "$KV_CACHE_MEMORY" ]] && KV_ARGS+=(--kv-cache-memory "$KV_CACHE_MEMORY")
 EAGER_ARGS=()

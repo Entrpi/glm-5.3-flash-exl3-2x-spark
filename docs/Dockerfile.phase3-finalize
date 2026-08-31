@@ -1,20 +1,21 @@
-# Phase 3 finalize layer: bake the runtime overlays into the image so the
-# /home/ent/glm53-hotfix* and b12x-exl3 bind mounts can be retired.
-# Context: /home/ent/phase3-finalize (exl3ext/, b12x/, fi-patches/)
+# v2 finalize layer: bake the runtime extras the base build cannot produce.
+# Context: /home/ent/phase3-finalize (exl3ext/, fi-patches/)
+#
+# DELTA vs Dockerfile.phase3-finalize (v1): the b12x whole-tree COPY is
+# GONE — the v2 base build compiles b12x from
+# Entrpi/sparkinfer-glmrt @ glm-next-backport (3ce6115) directly, so the
+# old fefb9c5 overwrite would REGRESS it. exl3ext (torch 2.13.0+cu130 ABI,
+# unchanged) and the FlashInfer sm12x fp8-MLA patches (needed for the
+# KV_DTYPE=fp8_e4m3 option) carry over.
 FROM vllm-node-glm53:latest
 
 # exllamav3_ext sm121 build (torch 2.13.0+cu130 ABI) — loaded via VLLM_EXL3_EXT_PATH
 COPY exl3ext/ /exl3ext/
 ENV VLLM_EXL3_EXT_PATH=/exl3ext
 
-# b12x: replace the image's lukealonso 1.3.0 tree wholesale with
-# tpurtell/sparkinfer-glmrt master @ fefb9c5 (the exl3_trellis_mcg fused lane
-# with BF16 Trellis MoE output; pure Python + CuTeDSL JIT). Same semantics as
-# the whole-tree bind mount this replaces; dist-info left untouched.
-RUN rm -rf /usr/local/lib/python3.12/dist-packages/b12x
-COPY b12x/ /usr/local/lib/python3.12/dist-packages/b12x/
-
 # FlashInfer 0.6.18 sm12x fp8-MLA patches (fp8 MLA gate major in (9,12) in
-# mla/_core.py + CTA_TILE_KV cap in mla.cuh) — live-validated on sm121
+# mla/_core.py + CTA_TILE_KV cap in mla.cuh) — live-validated on sm121.
+# ONLY valid against FlashInfer 0.6.18 — verify the base build's version
+# before applying (see the bake notes).
 COPY fi-patches/mla/_core.py /usr/local/lib/python3.12/dist-packages/flashinfer/mla/_core.py
 COPY fi-patches/data/include/flashinfer/attention/mla.cuh /usr/local/lib/python3.12/dist-packages/flashinfer/data/include/flashinfer/attention/mla.cuh

@@ -7,7 +7,7 @@
 # The tests live in the vLLM branch repo; a shallow sparse clone of tests/
 # is cached under /tmp and reused.
 set -euo pipefail
-IMG="${IMG:-ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v1-dflash2}"
+IMG="${IMG:-ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v2-glmnext}"
 BRANCH_REPO="${BRANCH_REPO:-https://github.com/Entrpi/vllm-glm-5.3-flash-spark}"
 TESTS_DIR="${TESTS_DIR:-/tmp/glm53-vllm-tests}"
 

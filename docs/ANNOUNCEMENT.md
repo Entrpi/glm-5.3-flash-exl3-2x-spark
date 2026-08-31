@@ -6,24 +6,27 @@ Per the community Docker publishing checklist.
 on one reference kit). Not an official release of any upstream project.
 
 **Image and digest:**
-`ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v1-dflash2`
-digest `sha256:284142c5833cbfd540ad42bb8f32cb340451db05a3b84029eaebae54579e9135`
+`ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v2-glmnext`
+digest `sha256:8fd3892b8a222477678d1e447b8a388c7e2f47c64c4f862ccbc61723501d54e8`
+(previous: `:v1-dflash2`
+`sha256:284142c5833cbfd540ad42bb8f32cb340451db05a3b84029eaebae54579e9135`)
 
-**Based on:** `nvidia/cuda:13.0.2-devel-ubuntu24.04` (aarch64), manifest-list
-digest `sha256:5dc1bca23d05bd37b011be68ec470c03b403a5da07ec3a86e41af9470e9d0cc6`,
+**Based on:** `nvidia/cuda:13.0.2-base-ubuntu24.04` (aarch64) slim rebase;
+JIT toolchain from the `13.0.2-devel` build donor,
 via eugr's `spark-vllm-docker` build system
 (credited; private — all inputs disclosed in [BUILD.md](BUILD.md)).
 
 **Build recipe:** [BUILD.md](BUILD.md) (build command, baked
-build-metadata.yaml verbatim, finalize Dockerfile shipped in-repo, and the
-one metadata trap called out: the shipped b12x is sparkinfer-glmrt
-`fefb9c5`, not the base build's lukealonso master).
+build-metadata.yaml, finalize + slim Dockerfiles shipped in-repo; unlike
+v1 the shipped b12x IS the base build's b12x — the fork below — so the
+old metadata trap is gone).
 
 **Source commits and PRs:** vLLM branch
 [Entrpi/vllm-glm-5.3-flash-spark](https://github.com/Entrpi/vllm-glm-5.3-flash-spark)
-@ `90104cfe4` (public, full history); b12x sparkinfer-glmrt `fefb9c5`;
-exllamav3 `c5d9c657`; FlashInfer 0.6.18 `083012d6` + 2 sm12x patches
-(shipped). No unlisted patches.
+@ `c83d60a5b` (public, full history); b12x
+[Entrpi/sparkinfer-glmrt](https://github.com/Entrpi/sparkinfer-glmrt)
+`glm-next-backport` @ `3ce6115`; exllamav3 `c5d9c657`; FlashInfer 0.6.18
+`083012d6` + 2 sm12x patches (shipped). No unlisted patches.
 
 **Changes from base:** README "Under the hood" — glm5_next port + sm121
 fixes, EXL3 standard-checkpoint fused serving, DFlash2 transplant + salted

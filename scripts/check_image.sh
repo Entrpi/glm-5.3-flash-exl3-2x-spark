@@ -1,8 +1,8 @@
 #!/bin/bash
 # Phase 3 image self-containment gauntlet (no GPU needed).
-# Usage: bash check_image_phase3.sh [image]  (default vllm-node-glm53:v1-dflash2)
+# Usage: bash check_image_phase3.sh [image]  (default vllm-node-glm53:v2-glmnext)
 set -u
-IMG="${1:-vllm-node-glm53:v1-dflash2}"
+IMG="${1:-vllm-node-glm53:v2-glmnext}"
 DP=/usr/local/lib/python3.12/dist-packages
 pass=0; fail=0
 chk() { # chk <label> <shell snippet that exits 0 on pass>
@@ -12,7 +12,7 @@ chk() { # chk <label> <shell snippet that exits 0 on pass>
     echo "FAIL: $1"; fail=$((fail+1))
   fi
 }
-EXPECT_COMMIT="${EXPECT_COMMIT:-90104cfe4}"
+EXPECT_COMMIT="${EXPECT_COMMIT:-c83d60a5b}"
 chk "vllm version stamps $EXPECT_COMMIT" "pip show vllm | grep -q g$EXPECT_COMMIT"
 chk "mm jinja has thinking gate"         "grep -q thinking_enabled $DP/vllm/transformers_utils/chat_templates/template_glm5next_mm.jinja"
 chk "glm5next mm jinja packaged"        "test -f $DP/vllm/transformers_utils/chat_templates/template_glm5next_mm.jinja"
@@ -46,11 +46,16 @@ fi
 fchk "FI fp8-MLA _core.py = staged patch" "$DP/flashinfer/mla/_core.py" "$FIN/fi-patches/mla/_core.py"
 fchk "FI mla.cuh = staged patch" "$DP/flashinfer/data/include/flashinfer/attention/mla.cuh" "$FIN/fi-patches/data/include/flashinfer/attention/mla.cuh"
 
-# b12x whole-tree hash vs staged sparkinfer tree (py files only; order-stable)
-tb=$(cd "$FIN/b12x" && LC_ALL=C find . -name '*.py' -type f | LC_ALL=C sort | xargs md5sum | md5sum | awk '{print $1}')
+# b12x whole-tree hash (py files only; order-stable) vs the pinned
+# Entrpi/sparkinfer-glmrt glm-next-backport @ 3ce6115 tree — computed as
+#   cd b12x && LC_ALL=C find . -name '*.py' -type f | LC_ALL=C sort \
+#     | xargs md5sum | md5sum
+# Self-contained on purpose: v2 bakes b12x in the base build, so there is
+# no staged host tree to compare against any more.
+tb="${B12X_TREE_MD5:-b338deafc04a92ac4099daab2c8da123}"
 ti=$(docker run --rm --entrypoint sh "$IMG" -c "cd $DP/b12x && LC_ALL=C find . -name '*.py' -type f | LC_ALL=C sort | xargs md5sum | md5sum" | awk '{print $1}')
-if [ "$tb" = "$ti" ]; then echo "PASS: b12x tree = staged sparkinfer @fefb9c5"; pass=$((pass+1))
-else echo "FAIL: b12x tree mismatch (image=$ti host=$tb)"; fail=$((fail+1)); fi
+if [ "$tb" = "$ti" ]; then echo "PASS: b12x tree = sparkinfer glm-next-backport @3ce6115"; pass=$((pass+1))
+else echo "FAIL: b12x tree mismatch (image=$ti expected=$tb)"; fail=$((fail+1)); fi
 echo "---"
 echo "image=$IMG pass=$pass fail=$fail"
 exit $fail

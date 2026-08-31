@@ -302,7 +302,7 @@ request died, at 524k drafterless and at 1M always. The fix retries the
 launch computation at the full ~99 KB smem (43 CTAs at 1M) before
 failing; on the `v1-dflash2` image it ships as a standalone
 `topk_fix.so` (built in-container from `tools/`-adjacent sources)
-loaded via `GLM53_TOPK_FIX_SO=/cache/topk_fix.so`; the next image bakes
+loaded via `GLM53_TOPK_FIX_SO=/cache/topk_fix.so`; `v2-glmnext` bakes
 the fix into `_C`. First native-1M results on this hardware
 (`MAX_LEN=1048576` + the NVFP4 lane):
 
@@ -378,15 +378,75 @@ results. (A d524288×c5 cell was measured but oversubscribes the KV pool
 Raw table: the run's CSV ships in the results archive; the arena
 leaderboard accepts submissions only via its own CLI.
 
+## 15. Concurrency: the sweep, the dflash spec-state wall, and the mixed-prefill decode floor (2026-08-31)
+
+A 16k-context concurrency sweep (c = 1..16, unique-from-token-0
+prompts, greedy + ignore_eos, engine-counter deltas) on the GLM_NEXT
+default answered three questions:
+
+**The knee is above c=16.** Aggregate throughput still climbs at 16
+streams (drafterless c16 = 103.0 tok/s, +17% over c12; MTP-4 c16 =
+95.2). Decode never becomes the bind at the concurrency this hardware
+can hold — capacity does. `MAX_SEQS=4` at the 524k declaration stands.
+
+**DFlash2 pins ~24–25 KV-pool blocks per running request, independent
+of context length.** Speculative decode on the hybrid stack reserves
+[k+1 spec-state slots] × [3 mamba cache groups] of full 4608-token
+blocks per request for the request's lifetime (plus the running-state
+block per group). At k=7 that is ~110k pool tokens per request before
+any actual context: a hard ~7-request cap at 16k contexts, a ~3.3×
+capacity tax at 50k, and 16 × 24 blocks would exceed the entire 287
+block pool — the high-concurrency profile cannot run with DFlash2
+today. The fix (dedicated slot pages outside the block pool) requires
+a worker-side rewrite of the spec-state indexing and is queued for a
+follow-up image; until then choose the speculator by concurrency:
+**DFlash2 for c ≤ 4** (best single-stream), **MTP-4 for c ≤ 4 with
+tighter memory** (k=4 → ~15 blocks/request), **drafterless for c ≥ 8**
+(zero spec-state tax; remember the 358k drafterless cap, §12).
+
+**Mixed prefill starves decode; the launcher now has a floor knob.**
+With a 133k cold prefill running next to decode streams, decode
+collapses from ~29.5 tok/s (2-stream aggregate) to p50 1.4 tok/s for
+the whole prefill — each mixed step carries a full 8k-token chunk with
+~5 s step time. The scheduler now supports a mixed-only policy
+(`MIXED_PREFILL_CAP`): `-1` skips peer prefill chunks while anything
+is decoding, `N` caps them to N tokens, `0`/unset is off (default).
+Solo prefills are never touched (unlike
+`--long-prefill-token-threshold`, which would destroy solo TTFT), and
+an anti-starvation guard (`MIXED_PREFILL_MAX_DEFER`, default 8) forces
+one unrestricted step after that many consecutive deferrals so queued
+prefills always progress. Measured on the production config:
+
+| setting | decode p50 during 133k prefill | 133k prefill wall |
+|---|---:|---:|
+| off (default) | 1.4 tok/s (5% of solo) | 89.1 s |
+| `MIXED_PREFILL_CAP=-1` (skip) | **11.4 tok/s (39%)** | 125.0 s (1.40×) |
+| cap 512 / 1024 / 2048 | 9.2–9.4 tok/s (~31%) | ~126–128 s (1.42×) |
+
+Skip dominates every cap value — per-step overhead, not chunk size,
+sets the mixed-step cost (the same shape MiaAI-Lab measured on their
+FLASHINFER lane; the guard is this kit's addition). It ships **off by
+default** (no arm reached 50% of solo decode, the pre-set adopt bar);
+turn it on for interactive/agent serving where decode latency matters
+more than cold-prefill TTFT: `MIXED_PREFILL_CAP=-1`. Raising
+`MIXED_PREFILL_MAX_DEFER` trades prefill TTFT for a higher floor.
+
+**Agentic profile (documented, not default):** for many concurrent
+mid-length agents prefer `MAX_LEN=131072`–`262144`, `MAX_SEQS=12`–`16`,
+`MNBT=4096`, `SPEC=none` (or `MTP=4` at the smaller end),
+`MIXED_PREFILL_CAP=-1`. The 524k DFlash2 default is tuned for few deep
+streams, and the spec-state wall above makes it actively wrong for
+high concurrency.
+
 ## Production recommendation
 
 Serve the GLM_NEXT lane (ratified default 2026-08-30):
 `ATTN_BACKEND=B12X_MLA_SPARSE KV_DTYPE=fp8_ds_mla
 KV_SKIP_LAYERS=sliding_window`, 524k context, DFlash2 k=7, CUDA graphs,
 MNBT 8192, KV budget 12.4 GB, gmu 0.85, `SKIP_MM_PROFILING=1`, thinking
-off at the serving layer. On the `v1-dflash2` image this requires the
-hotfix overlays (fork @ `5c9e2bfd2` + b12x `glm-next-backport`); the
-next image bakes it. The fp8_e4m3 lane (no overlay needed) remains fully
+off at the serving layer. The `v2-glmnext` image bakes the whole lane (fork
+@ `c83d60a5b` + b12x `glm-next-backport`); on the older `v1-dflash2` it
+required hotfix overlays. The fp8_e4m3 lane (no overlay needed) remains fully
 supported: drop the three env knobs. For math-heavy workloads the
 GLM_NEXT default now leads (91/100); the short-context bf16 profile
 (`MAX_LEN=131072 KV_DTYPE= ATTN_BACKEND= SKIP_MM_PROFILING=0
@@ -398,7 +458,7 @@ Two opt-in profiles extend the default (§13): **NVFP4 KV**
 (`KV_DTYPE=nvfp4_ds_mla VLLM_NVFP4_MLA_DYNAMIC_SCALE=1`) trades a
 little quality headroom (math 88 vs 91, lavd 10 vs 15 EXACT) for +28.6%
 pool (3.25 × 524k banks); **native 1M** (`MAX_LEN=1048576` on the NVFP4
-lane + `GLM53_TOPK_FIX_SO=/cache/topk_fix.so` on the v1 image) serves
+lane; on the v1 image add `GLM53_TOPK_FIX_SO=/cache/topk_fix.so`) serves
 two concurrent full-length 1M banks — budget ~15 min per cold 1M
 prefill and prefer `MNBT=4096` (head-box floor). fp8_ds_mla stays the
 default because it wins the quality gates outright.

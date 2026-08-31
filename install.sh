@@ -52,7 +52,7 @@ DFLASH_DIR="${DFLASH_DIR:-$HOME/models/glm53-dflash2}"
 EXL3_REPO="${EXL3_REPO:-brandonmusic/GLM-5.3-Flash-tr3-4bpw}"
 EXL3_REPO_FALLBACK="${EXL3_REPO_FALLBACK:-Mia-AiLab/GLM-5.3-Flash-EXL3-TR3-4bpw}"
 DFLASH_REPO="${DFLASH_REPO:-incoai/GLM-5.3-Flash-DFlash2}"
-IMAGE="${IMAGE:-ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v1-dflash2}"
+IMAGE="${IMAGE:-ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v2-glmnext}"
 NFS_PORT="${NFS_PORT:-12049}"
 # --nfs mode export server image. Default: the kit's own minimal NFSv4-only
 # image (nfs/Dockerfile), built natively ON the worker at install time —
@@ -178,7 +178,14 @@ verify_hosts() {
   local swap_short=""
   [ "${SWAP_HEAD:-0}" -ge 30 ] || swap_short="head(${SWAP_HEAD}G)"
   [ "${SWAP_WORKER:-0}" -ge 30 ] || swap_short="$swap_short worker(${SWAP_WORKER}G)"
-  if [ -n "$swap_short" ] && [ "${LOAD_FORMAT:-}" != "instanttensor" ]; then
+  # ${VAR-default} mirrors the launcher: UNSET tracks the launcher's
+  # instanttensor default (no swap dependency); an explicitly EMPTY
+  # LOAD_FORMAT= opts into the page-cached loader and needs the swap.
+  local effective_load_format="${LOAD_FORMAT-instanttensor}"
+  if [ -n "$swap_short" ] && [ "$effective_load_format" = "instanttensor" ]; then
+    warn "swap below 32G ($swap_short) — fine with the default direct-I/O loader, but grow it before opting into LOAD_FORMAT= (page-cached)"
+  fi
+  if [ -n "$swap_short" ] && [ "$effective_load_format" != "instanttensor" ]; then
     warn "INSUFFICIENT SWAP:$swap_short — need >=32G per box."
     warn "Weight load consumes ALL available swap (measured: the reference pair's"
     warn "full 32 GiB, in both local and --nfs modes). With stock 16 GiB the head"

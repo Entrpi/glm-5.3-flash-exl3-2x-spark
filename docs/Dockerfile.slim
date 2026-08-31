@@ -1,4 +1,4 @@
-# SLIM rebase of ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v1-dflash2.
+# SLIM rebase for the v2-glmnext image (donor = the v2 finalized build).
 # Technique credit: AEON-7/vllm-ultimate-dgx-spark Dockerfile.slim, whose
 # measured analysis transfers to this image almost verbatim.
 #
@@ -20,11 +20,11 @@
 #
 # Build (on a box holding the donor image, cluster idle — the COPY streams
 # ~16 GB through the page cache):
-#   docker build -f Dockerfile.slim -t ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v1-dflash2-slim .
+#   docker build -f Dockerfile.slim -t ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v2-glmnext .
 # Then run the FULL gauntlet (check_image.sh, run_tests.sh, boot + bench)
 # before shipping — this is a rebase, not a layer edit.
 
-FROM ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v1-dflash2 AS donor
+FROM vllm-node-glm53:v2-finalized AS donor
 
 FROM nvidia/cuda:13.0.2-base-ubuntu24.04
 ENV DEBIAN_FRONTEND=noninteractive

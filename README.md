@@ -24,9 +24,9 @@ out in a table below. Opt-in profiles go further: **NVFP4 KV** lifts the
 pool to **1,702,584 tokens (3.25 banks)**, and the **native-1M profile
 serves 1,048,576-token context with 2.05 concurrent full banks** —
 needle-exact at 875k depth, decode flat at full depth, ~15 min per cold
-1M prefill (FINDINGS §13). On the shipped `v1-dflash2` image these lanes
-need the hotfix overlays (see Profiles); they become baked options with
-the next image. (Numbers published before 2026-08-29 came from an
+1M prefill (FINDINGS §13). All of this is baked into the shipped
+`v2-glmnext` image (on the older `v1-dflash2` these lanes needed hotfix
+overlays). (Numbers published before 2026-08-29 came from an
 earlier measurement era — before the `enable_thinking` template fix
 changed drafting and eval behavior — and are labeled where kept.)
 
@@ -87,11 +87,11 @@ KV budget:
 
 | Configuration | KV pool (tokens) | Concurrency @max-len | Notes |
 |---|---:|---:|---|
-| **Native 1M: `MAX_LEN=1048576`, DFlash2 + `nvfp4_ds_mla` KV** | **2,144,814** | 2.05× | two concurrent full-length native-1M banks (FINDINGS §13); needs the NVFP4 lane + the `persistent_topk` fix (`GLM53_TOPK_FIX_SO` on the v1 image); ~15 min per cold 1M prefill, run with `MNBT=4096` |
+| **Native 1M: `MAX_LEN=1048576`, DFlash2 + `nvfp4_ds_mla` KV** | **2,144,814** | 2.05× | two concurrent full-length native-1M banks (FINDINGS §13); needs the NVFP4 lane (the `persistent_topk` retry fix is baked since `v2-glmnext`; on `v1-dflash2` load `GLM53_TOPK_FIX_SO`); ~15 min per cold 1M prefill, run with `MNBT=4096` |
 | Native 1M, DFlash2 + `fp8_ds_mla` KV | 1,530,144 | 1.46× | the default KV format also serves the full native declaration (topk fix required): one 1M bank plus ~480k spare; cold 1.03M prefill 1,251 tok/s, needle-exact |
 | 524k, DFlash2 + `nvfp4_ds_mla` KV | 1,702,584 | 3.25× | rope-less 304 B/token records with a dynamic per-token scale (`VLLM_NVFP4_MLA_DYNAMIC_SCALE=1`, no calibration file); quality between the two fp8 lanes (math 88, lavd 10 EXACT) |
-| **GLM_NEXT lane: 524k, DFlash2 + `fp8_ds_mla` KV** | **1,324,163** | 2.53× | ratified default 2026-08-30 (b12x 528 B/token packed records); on the `v1-dflash2` image it needs the hotfix overlays — becomes the baked default with the next image. Drafterless pool: 1,858,451 (the deficit vs the row below is entirely the draft ring-KV running bf16 under the skip mechanism) |
-| 524k, DFlash2 + `fp8_e4m3` KV | 1,435,070 | 2.74× | the 2026-08-29 default, fully supported on the shipped image; vLLM auto-bumps the KV block to 4608 for KDA/attention page parity |
+| **GLM_NEXT lane: 524k, DFlash2 + `fp8_ds_mla` KV** | **1,324,163** | 2.53× | **the baked default since the `v2-glmnext` image** (ratified 2026-08-30; b12x 528 B/token packed records). Drafterless pool: 1,858,451 (the deficit vs the row below is entirely the draft ring-KV running bf16 under the skip mechanism) |
+| 524k, DFlash2 + `fp8_e4m3` KV | 1,435,070 | 2.74× | the 2026-08-29 default (`KV_DTYPE=fp8_e4m3 ATTN_BACKEND= KV_SKIP_LAYERS=`); vLLM auto-bumps the KV block to 4608 for KDA/attention page parity |
 | 358k, DFlash2 + fp8 | 1,275,306 | 3.56× | `MAX_LEN=358400` — more concurrency headroom |
 | 131k short-context mode, bf16 KV | 520,470 | 3.97× | `MAX_LEN=131072 KV_DTYPE= ATTN_BACKEND= SKIP_MM_PROFILING=0 MAX_SEQS=6` — the pre-2026-08-29 default; math parity with fp8 (86 vs 87 n=100) |
 | 131k, fp8 (2304 block) | 769,817 | 5.87× | historical option gate |
@@ -117,46 +117,49 @@ on the memory-binding box under saturation plus a 112k-token prefill.
 > ([tools/memlog.sh](tools/memlog.sh)) — floors also degrade 1.5–2 GiB per
 > day of workload, so fresh-boot numbers are optimistic.
 
-> **Swap is load-bearing on GB10 — the stock 16 GiB is not enough.**
-> During weight load the head consumes every byte of swap it has, in BOTH
-> local and `--nfs` modes (`--nfs` does not pace the load over a fast
-> rail). Measured on the reference pair (headless, minimal services,
-> 2 s sampling): the head peaked at its **full 32 GiB of swap with a
-> 0.8 GiB MemFree floor** in both modes, and even the worker pegged its
-> 16 GiB. With stock 16 GiB swap the head dies deterministically at
-> ~88–95% of shard load (`NV_ERR_NO_MEMORY` or an oom-kill) — reported
-> independently on three other pairs. Before first boot, grow swap on
-> **both** boxes:
+> **Weight load uses direct I/O by default** (`LOAD_FORMAT=instanttensor`,
+> the launcher default since 2026-08-31): it bypasses the page cache, cuts
+> the head's load from ~7 min to **~3.6 min launch→API**, and eliminates
+> the load-time swap consumption entirely (measured peaks 4 GiB head /
+> 2.7 GiB worker, vs pegging all of a 32 GiB swap file with the page-cached
+> loader). Expect a ~10–15 min post-boot settling window with mildly noisy
+> TTFT while load-era pages fault back in. Recipe by @Marker689 (#2),
+> verified on the reference pair and three community pairs.
 >
-> ```
-> sudo fallocate -l 32G /swap-glm53 && sudo chmod 600 /swap-glm53 && sudo mkswap /swap-glm53 && sudo swapon /swap-glm53
-> ```
->
-> (add it to `/etc/fstab` to persist — `install.sh` checks both boxes and
-> offers to do this for you), or bypass the page cache entirely
-> with `LOAD_FORMAT=instanttensor` in `.env` — field-verified on three
-> community pairs, not yet part of the reference receipts. Both local and
-> `--nfs` topologies are fully measured working with 32 GiB swap.
+> If you opt back into the page-cached loader (`LOAD_FORMAT=` empty), swap
+> becomes load-bearing and **stock 16 GiB is not enough**: the head peaks
+> at its full 32 GiB of swap with a 0.8 GiB MemFree floor in both local and
+> `--nfs` modes, and dies deterministically at ~88–95% of shard load with
+> less (`NV_ERR_NO_MEMORY` / oom-kill — reported independently on three
+> pairs). Grow swap on **both** boxes first
+> (`sudo fallocate -l 32G /swap-glm53 && sudo chmod 600 /swap-glm53 &&
+> sudo mkswap /swap-glm53 && sudo swapon /swap-glm53`, persist via
+> `/etc/fstab` — `install.sh` checks and offers this).
 
 ### Startup time
 
-Worker joins in ~25 s; the head takes **~7 min** to API-up with local
-weights (**~12–13 min** in `--nfs` mode) — weight load + engine init +
-CUDA-graph capture, including the drafter's own full graphs. `install.sh` then runs a ~20 s JIT shape warmup so the first
-real request doesn't pay ~7 s of lazy compilation. JIT caches persist across
-relaunches (`~/glm53-vllm-cache/jit`).
+Worker joins in ~25 s; the head takes **~3.6 min** to API-up with the
+default direct-I/O loader (measured ~225 s on the reference pair, local
+weights) — weight load + engine init + CUDA-graph capture, including the
+drafter's own full graphs. The page-cached loader (`LOAD_FORMAT=` empty)
+takes ~7 min local / ~12–13 min `--nfs`. `install.sh` then runs a ~20 s
+JIT shape warmup so the first real request doesn't pay ~7 s of lazy
+compilation. JIT caches persist across relaunches
+(`~/glm53-vllm-cache/jit`).
 
 ## Profiles
 
 | Profile | How | When |
 |---|---|---|
 | **NVFP4 KV** | GLM_NEXT lane knobs + `KV_DTYPE=nvfp4_ds_mla VLLM_NVFP4_MLA_DYNAMIC_SCALE=1` | +28.6% pool (3.25 × 524k banks) at a small quality cost vs `fp8_ds_mla` (FINDINGS §13); dynamic per-token scales, no calibration file |
-| **Native 1M** | NVFP4 knobs + `MAX_LEN=1048576 MNBT=4096` (+ `GLM53_TOPK_FIX_SO=/cache/topk_fix.so` on the v1 image) | 2.05 concurrent 1M banks; needle-exact at 875k depth, decode flat at full depth; ~15 min cold 1M prefill (FINDINGS §13) |
-| **GLM_NEXT b12x lane** | `ATTN_BACKEND=B12X_MLA_SPARSE KV_DTYPE=fp8_ds_mla KV_SKIP_LAYERS=sliding_window` on both launches | ratified default 2026-08-30 — beats the fp8_e4m3 lane on every quality and speed gate (see FINDINGS §12); on the `v1-dflash2` image it requires the hotfix overlays (fork @ `5c9e2bfd2` + b12x `glm-next-backport`) and becomes the baked default with the next image |
-| Shipped-image default | (nothing) | 524k context, DFlash2 k=7 + fp8_e4m3 KV + CUDA graphs — 2.74 concurrent full banks, fully baked into `v1-dflash2` |
+| **Native 1M** | NVFP4 knobs + `MAX_LEN=1048576 MNBT=4096` (on `v1-dflash2` also `GLM53_TOPK_FIX_SO=/cache/topk_fix.so`; baked since `v2-glmnext`) | 2.05 concurrent 1M banks; needle-exact at 875k depth, decode flat at full depth; ~15 min cold 1M prefill (FINDINGS §13) |
+| **Shipped-image default (GLM_NEXT b12x lane)** | (nothing) | 524k context, DFlash2 k=7 + `fp8_ds_mla` packed KV + `B12X_MLA_SPARSE` + CUDA graphs — baked into `v2-glmnext` (ratified 2026-08-30; beats the fp8_e4m3 lane on every quality and speed gate, FINDINGS §12). On the older `v1-dflash2` image the lane needs the hotfix overlays |
+| fp8_e4m3 lane | `KV_DTYPE=fp8_e4m3 ATTN_BACKEND= KV_SKIP_LAYERS=` on both launches | the 2026-08-29 default — 2.74 concurrent full banks; also the profile fully baked into `v1-dflash2` |
 | Short-context bf16 | `MAX_LEN=131072 KV_DTYPE= ATTN_BACKEND= SKIP_MM_PROFILING=0 MAX_SEQS=6` on both launches | the pre-2026-08-29 production config; 131k context |
 | MTP fallback | `MTP=4` on both launches | if the drafter ever misbehaves; ~21% slower |
 | No speculation | `SPEC=none` | maximum KV pool, debugging — but NOT at 524k declared: with ≤4 decode rows the `persistent_topk` small-batch heuristic oversubscribes sm121 (FINDINGS §12); cap `MAX_LEN` ≤ ~358k for drafterless runs |
+| **Agentic / high concurrency** | `MAX_LEN=131072`–`262144 MAX_SEQS=12`–`16 MNBT=4096 SPEC=none MIXED_PREFILL_CAP=-1` | many concurrent mid-length streams; the knee is above c=16 (FINDINGS §15). DFlash2 is the wrong speculator here — it pins ~24 pool blocks per running request (§15); use `MTP=4` at the smaller end if you want speculation |
+| Interactive decode floor | `MIXED_PREFILL_CAP=-1` on top of any profile | keeps decode at ~39% of solo speed while cold prefills run (vs 5% default) for 1.40× their TTFT; solo prefills unaffected (FINDINGS §15) |
 
 Thinking is **off by default** at the serving layer
 (`--default-chat-template-kwargs '{"enable_thinking": false}'`); enable per
