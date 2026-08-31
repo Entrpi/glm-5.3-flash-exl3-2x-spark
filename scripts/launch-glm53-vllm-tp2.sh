@@ -140,6 +140,10 @@ _num_err() { echo "config error: $1 (nothing torn down)" >&2; exit 2; }
   || _num_err "MAX_SEQS='$MAX_SEQS' must be a positive int <= 256"
 [[ -z "$MNBT" || ( "$MNBT" =~ ^[1-9][0-9]*$ && "$MNBT" -le 131072 ) ]] \
   || _num_err "MNBT='$MNBT' must be empty or a positive int <= 131072"
+[[ -z "${MIXED_PREFILL_CAP:-}" || "${MIXED_PREFILL_CAP:-}" =~ ^(-1|0|[1-9][0-9]*)$ ]] \
+  || _num_err "MIXED_PREFILL_CAP='$MIXED_PREFILL_CAP' must be empty, -1 (skip), 0 (off), or a positive int"
+[[ -z "${MIXED_PREFILL_MAX_DEFER:-}" || "${MIXED_PREFILL_MAX_DEFER:-}" =~ ^(0|[1-9][0-9]*)$ ]] \
+  || _num_err "MIXED_PREFILL_MAX_DEFER='$MIXED_PREFILL_MAX_DEFER' must be empty or a non-negative int"
 
 case "$NODE_RANK" in
   0) HOST_IP="$HEAD_RAIL_IP"; HEADLESS="" ;;
@@ -226,6 +230,16 @@ KDA_ARGS=()
 # cache groups' block sizes, which resolves to 4608 on this stack).
 PREFIX_MATCH_UNIT="${PREFIX_MATCH_UNIT:-}"
 [[ -n "$PREFIX_MATCH_UNIT" ]] && KDA_ARGS+=(--prefix-match-unit "$PREFIX_MATCH_UNIT")
+# Mixed-prefill decode floor: while anything is decoding, skip (-1) or cap
+# (N tokens) peer prefill chunks; solo prefills keep full MNBT chunks.
+# Empty = engine default (off). MIXED_PREFILL_MAX_DEFER bounds consecutive
+# deferrals before one unrestricted step (anti-starvation; engine default 8).
+MIXED_PREFILL_CAP="${MIXED_PREFILL_CAP:-}"
+[[ -n "$MIXED_PREFILL_CAP" ]] \
+  && KDA_ARGS+=(--mixed-prefill-token-cap "$MIXED_PREFILL_CAP")
+MIXED_PREFILL_MAX_DEFER="${MIXED_PREFILL_MAX_DEFER:-}"
+[[ -n "$MIXED_PREFILL_MAX_DEFER" ]] \
+  && KDA_ARGS+=(--mixed-prefill-max-defer-steps "$MIXED_PREFILL_MAX_DEFER")
 KV_ARGS=()
 [[ -n "$KV_DTYPE" ]] && KV_ARGS+=(--kv-cache-dtype "$KV_DTYPE")
 # Explicit attention backend (e.g. ATTN_BACKEND=B12X_MLA_SPARSE for the
