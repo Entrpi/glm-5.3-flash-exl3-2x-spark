@@ -438,6 +438,49 @@ mid-length agents prefer `MAX_LEN=131072`–`262144`, `MAX_SEQS=12`–`16`,
 streams, and the spec-state wall above makes it actively wrong for
 high concurrency.
 
+## 16. Fine-grained prefix reuse (v2.1, 2026-09-01)
+
+`--prefix-match-unit 2304` (the v2.1 launcher default) halves the
+prefix-cache hash grain below the 4608-token mamba block, waking the
+partial-tail machinery: a producer registers its prompt-tail recurrent
+state at the last 2304 boundary, and an exact-extension turn resumes
+there with only a tail-gap replay. Measured on the 2x-GB10 stack:
+warm agentic turns 3.0-3.2 s vs ~12 s cold at 12-17k context (~3.9x
+turn rate), accept lengths 7-8/8 on warm turns, factual-QA parity
+10/10 warm vs 10/10 cold.
+
+Four engine fixes make this safe (fork commits ad4b9d92a, 3996320a5,
+1c66e5df2, 1d220461f — baked in v2.1; the default is ENGINE-FATAL on
+v2 and earlier images, whose CoW helper asserts on the first sub-block
+partial hit):
+
+- Per-block copy-on-write now skips ring-backed DFlash draft tensors
+  (they hold ring-slot pages, not pool pages).
+- Drafting survives fine restores: the scheduler reserves one draft
+  sliding window (2048 tokens) of replay on every fine hit, and the
+  speculator allows block-unaligned restored prefixes once the
+  replayed tail covers the draft window (restored garbage falls
+  outside every query's window). Without this, warm decode fell to
+  dense speed (~10.7 tok/s vs ~28).
+- The mamba-align eagle backoff is skipped for DFlash (its draft
+  group opts out of prefix caching, so nothing ever eagle-drops):
+  previously the LAST complete 4608 boundary was permanently
+  unhittable whenever the prompt remainder fit one scheduling chunk -
+  this backoff is the entire origin of the historical
+  `(complete_blocks - 1) x 4608` warm-hit rule. Every complete block
+  boundary is now hittable.
+
+Reuse floors after v2.1: byte-identical repeats and extensions hit
+`floor((P - 1 - 2048) / 2304) * 2304`; the producer-tail state at
+`floor((P - 1) / 2304) * 2304` becomes reachable once the extension
+exceeds ~2048 tokens plus the sub-unit remainder. The 2048-token
+reserve is the price of keeping speculative decoding on warm turns
+(without it, TTFT drops another ~1.5 s but decode runs drafterless).
+`PREFIX_MATCH_UNIT=` (explicit empty) restores the coarse 4608
+behavior. Divergent-tail requests (shared doc, different question)
+reuse the same boundary states. Interior odd 2304-units have no
+stored state by design; block boundaries and producer tails do.
+
 ## Production recommendation
 
 Serve the GLM_NEXT lane (ratified default 2026-08-30):

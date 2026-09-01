@@ -53,7 +53,7 @@ VOL_NAME="${VOL_NAME:-exl3weights}"
 MODEL_PATH="/models/glm53-exl3"
 
 # ---- serving knobs (defaults = the validated production configuration) -----
-IMAGE="${IMAGE:-ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v2-glmnext}"
+IMAGE="${IMAGE:-ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v2.1-finegrain}"
 NAME="${NAME:-vllm_glm53}"
 MAX_LEN="${MAX_LEN:-524288}"             # 500k default bank (2026-08-29);
                                          # 131072 was the pre-long-context
@@ -228,9 +228,12 @@ elif [[ "$SPEC" == "dflash" ]]; then
 fi
 KDA_ARGS=()
 [[ -n "$KDA_PREFILL" ]] && KDA_ARGS=(--kda-prefill-backend "$KDA_PREFILL")
-# Prefix-cache hash granularity override (e.g. 2304; default = GCD of the
-# cache groups' block sizes, which resolves to 4608 on this stack).
-PREFIX_MATCH_UNIT="${PREFIX_MATCH_UNIT:-}"
+# Prefix-cache hash granularity. Default 2304 = fine-grained hashing (v2.1:
+# sub-block prefix hits, producer-tail state reuse, agentic warm turns ~3-4x;
+# needs the v2.1+ image — the CoW/backoff fixes are engine-fatal-absent on
+# v2 and earlier). Explicit-empty (PREFIX_MATCH_UNIT=) restores the coarse
+# 4608 engine default.
+PREFIX_MATCH_UNIT="${PREFIX_MATCH_UNIT-2304}"
 [[ -n "$PREFIX_MATCH_UNIT" ]] && KDA_ARGS+=(--prefix-match-unit "$PREFIX_MATCH_UNIT")
 # Mixed-prefill decode floor: while anything is decoding, skip (-1) or cap
 # (N tokens) peer prefill chunks; solo prefills keep full MNBT chunks.

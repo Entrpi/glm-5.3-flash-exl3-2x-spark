@@ -3,16 +3,25 @@
 **Status: community derivative.** Not an official image of vLLM,
 local-inference-lab, eugr, or NVIDIA.
 
-## Identity (current: v2-glmnext)
+## Identity (current: v2.1-finegrain)
 
 | | |
 |---|---|
-| Tag | `ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v2-glmnext` |
-| Digest | `sha256:8fd3892b8a222477678d1e447b8a388c7e2f47c64c4f862ccbc61723501d54e8` (`:v2-glmnext` = `:latest`) |
+| Tag | `ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v2.1-finegrain` |
+| Digest | `sha256:50148c7b44e9121470e9735f24fb364fdf591718782fffb6a96c01b5a09bfc16` (`:v2.1-finegrain` = `:latest`) |
 | Base image | `nvidia/cuda:13.0.2-base-ubuntu24.04` (aarch64; slim rebase — the JIT toolchain is copied from the devel build donor) |
 | Arch | linux/arm64, CUDA kernels compiled for `12.1a` (GB10 / sm_121) |
 
-Previous: `:v1-dflash2`
+Delta vs `v2-glmnext`: vLLM `1d220461f` (5 commits — fine-grained prefix
+reuse: ring-safe per-block CoW, draft-replay reserve + gap-aware restore
+guard, mamba eagle-backoff skip for DFlash, draft-spec restore window;
+all pure Python, kernels unchanged). Same 3-layer build, same b12x
+`3ce6115`, same FlashInfer 0.6.18 patches.
+
+Previous: `:v2-glmnext`
+`sha256:8fd3892b8a222477678d1e447b8a388c7e2f47c64c4f862ccbc61723501d54e8`
+(vLLM `c83d60a5b`; the fine-grained default `PREFIX_MATCH_UNIT=2304` is
+ENGINE-FATAL on it — use `PREFIX_MATCH_UNIT=` there), and `:v1-dflash2`
 `sha256:284142c5833cbfd540ad42bb8f32cb340451db05a3b84029eaebae54579e9135`
 (base `nvidia/cuda:13.0.2-devel-ubuntu24.04`,
 `sha256:5dc1bca23d05bd37b011be68ec470c03b403a5da07ec3a86e41af9470e9d0cc6`) —
@@ -30,7 +39,7 @@ Three layers:
 
    ```
    ./build-and-copy.sh -t vllm-node-glm53 --exp-b12x \
-       --vllm-source-dir <clone of Entrpi/vllm-glm-5.3-flash-spark @ c83d60a5b> --rebuild-vllm
+       --vllm-source-dir <clone of Entrpi/vllm-glm-5.3-flash-spark @ 1d220461f> --rebuild-vllm
    ```
 
    with the harness's b12x source pinned to
@@ -59,7 +68,7 @@ Three layers:
 
 | Component | Source | Ref |
 |---|---|---|
-| vLLM | [Entrpi/vllm-glm-5.3-flash-spark](https://github.com/Entrpi/vllm-glm-5.3-flash-spark) | `c83d60a5b` (branch `main`, full history incl. the local-inference-lab fork lineage) |
+| vLLM | [Entrpi/vllm-glm-5.3-flash-spark](https://github.com/Entrpi/vllm-glm-5.3-flash-spark) | `1d220461f` (branch `main`, full history incl. the local-inference-lab fork lineage) |
 | b12x | [Entrpi/sparkinfer-glmrt](https://github.com/Entrpi/sparkinfer-glmrt) | branch `glm-next-backport` @ `3ce6115` (fork of tpurtell/sparkinfer-glmrt, lukealonso/b12x lineage) |
 | exllamav3 | [turboderp-org/exllamav3](https://github.com/turboderp-org/exllamav3) | `c5d9c657` |
 | FlashInfer | prebuilt 0.6.18 (`083012d6`) + the two sm12x patches above | — |

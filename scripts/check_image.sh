@@ -2,7 +2,7 @@
 # Phase 3 image self-containment gauntlet (no GPU needed).
 # Usage: bash check_image_phase3.sh [image]  (default vllm-node-glm53:v2-glmnext)
 set -u
-IMG="${1:-vllm-node-glm53:v2-glmnext}"
+IMG="${1:-vllm-node-glm53:v2.1-glmnext}"
 DP=/usr/local/lib/python3.12/dist-packages
 pass=0; fail=0
 chk() { # chk <label> <shell snippet that exits 0 on pass>
@@ -12,7 +12,7 @@ chk() { # chk <label> <shell snippet that exits 0 on pass>
     echo "FAIL: $1"; fail=$((fail+1))
   fi
 }
-EXPECT_COMMIT="${EXPECT_COMMIT:-c83d60a5b}"
+EXPECT_COMMIT="${EXPECT_COMMIT:-1d220461f}"
 chk "vllm version stamps $EXPECT_COMMIT" "pip show vllm | grep -q g$EXPECT_COMMIT"
 chk "mm jinja has thinking gate"         "grep -q thinking_enabled $DP/vllm/transformers_utils/chat_templates/template_glm5next_mm.jinja"
 chk "glm5next mm jinja packaged"        "test -f $DP/vllm/transformers_utils/chat_templates/template_glm5next_mm.jinja"

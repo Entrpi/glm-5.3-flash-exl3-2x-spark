@@ -23,7 +23,7 @@ old metadata trap is gone).
 
 **Source commits and PRs:** vLLM branch
 [Entrpi/vllm-glm-5.3-flash-spark](https://github.com/Entrpi/vllm-glm-5.3-flash-spark)
-@ `c83d60a5b` (public, full history); b12x
+@ `1d220461f` (public, full history); b12x
 [Entrpi/sparkinfer-glmrt](https://github.com/Entrpi/sparkinfer-glmrt)
 `glm-next-backport` @ `3ce6115`; exllamav3 `c5d9c657`; FlashInfer 0.6.18
 `083012d6` + 2 sm12x patches (shipped). No unlisted patches.

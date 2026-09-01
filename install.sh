@@ -52,7 +52,7 @@ DFLASH_DIR="${DFLASH_DIR:-$HOME/models/glm53-dflash2}"
 EXL3_REPO="${EXL3_REPO:-brandonmusic/GLM-5.3-Flash-tr3-4bpw}"
 EXL3_REPO_FALLBACK="${EXL3_REPO_FALLBACK:-Mia-AiLab/GLM-5.3-Flash-EXL3-TR3-4bpw}"
 DFLASH_REPO="${DFLASH_REPO:-incoai/GLM-5.3-Flash-DFlash2}"
-IMAGE="${IMAGE:-ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v2-glmnext}"
+IMAGE="${IMAGE:-ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v2.1-finegrain}"
 NFS_PORT="${NFS_PORT:-12049}"
 # --nfs mode export server image. Default: the kit's own minimal NFSv4-only
 # image (nfs/Dockerfile), built natively ON the worker at install time —

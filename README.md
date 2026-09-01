@@ -25,8 +25,10 @@ pool to **1,702,584 tokens (3.25 banks)**, and the **native-1M profile
 serves 1,048,576-token context with 2.05 concurrent full banks** —
 needle-exact at 875k depth, decode flat at full depth, ~15 min per cold
 1M prefill (FINDINGS §13). All of this is baked into the shipped
-`v2-glmnext` image (on the older `v1-dflash2` these lanes needed hotfix
-overlays). (Numbers published before 2026-08-29 came from an
+`v2.1-finegrain` image, which adds fine-grained prefix reuse on top of
+`v2-glmnext` — warm agentic turns run ~3.9× faster (3.0-3.2 s vs ~12 s
+at 12-17k context, FINDINGS §16). (On the older `v1-dflash2` these
+lanes needed hotfix overlays.) (Numbers published before 2026-08-29 came from an
 earlier measurement era — before the `enable_thinking` template fix
 changed drafting and eval behavior — and are labeled where kept.)
 
@@ -153,7 +155,7 @@ compilation. JIT caches persist across relaunches
 |---|---|---|
 | **NVFP4 KV** | GLM_NEXT lane knobs + `KV_DTYPE=nvfp4_ds_mla VLLM_NVFP4_MLA_DYNAMIC_SCALE=1` | +28.6% pool (3.25 × 524k banks) at a small quality cost vs `fp8_ds_mla` (FINDINGS §13); dynamic per-token scales, no calibration file |
 | **Native 1M** | NVFP4 knobs + `MAX_LEN=1048576 MNBT=4096` (on `v1-dflash2` also `GLM53_TOPK_FIX_SO=/cache/topk_fix.so`; baked since `v2-glmnext`) | 2.05 concurrent 1M banks; needle-exact at 875k depth, decode flat at full depth; ~15 min cold 1M prefill (FINDINGS §13) |
-| **Shipped-image default (GLM_NEXT b12x lane)** | (nothing) | 524k context, DFlash2 k=7 + `fp8_ds_mla` packed KV + `B12X_MLA_SPARSE` + CUDA graphs — baked into `v2-glmnext` (ratified 2026-08-30; beats the fp8_e4m3 lane on every quality and speed gate, FINDINGS §12). On the older `v1-dflash2` image the lane needs the hotfix overlays |
+| **Shipped-image default (GLM_NEXT b12x lane)** | (nothing) | 524k context, DFlash2 k=7 + `fp8_ds_mla` packed KV + `B12X_MLA_SPARSE` + CUDA graphs + fine-grained prefix reuse (`--prefix-match-unit 2304`, since `v2.1-finegrain`: warm agentic turns ~3.9×, FINDINGS §16; `PREFIX_MATCH_UNIT=` restores coarse) — lane ratified 2026-08-30, beats the fp8_e4m3 lane on every quality and speed gate (FINDINGS §12). On the older `v1-dflash2` image the lane needs the hotfix overlays |
 | fp8_e4m3 lane | `KV_DTYPE=fp8_e4m3 ATTN_BACKEND= KV_SKIP_LAYERS=` on both launches | the 2026-08-29 default — 2.74 concurrent full banks; also the profile fully baked into `v1-dflash2` |
 | Short-context bf16 | `MAX_LEN=131072 KV_DTYPE= ATTN_BACKEND= SKIP_MM_PROFILING=0 MAX_SEQS=6` on both launches | the pre-2026-08-29 production config; 131k context |
 | MTP fallback | `MTP=4` on both launches | if the drafter ever misbehaves; ~21% slower |
