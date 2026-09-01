@@ -190,6 +190,8 @@ EXTRA_ENVS=()
 # e.g. VLLM_DISABLED_KERNELS=FlashInferCutlassMxfp8LinearKernel to step the
 # MXFP8 draft GEMM ladder down to Marlin W8A16.
 [[ -n "${VLLM_DISABLED_KERNELS:-}" ]] && EXTRA_ENVS+=(-e "VLLM_DISABLED_KERNELS=$VLLM_DISABLED_KERNELS")
+# Admin/dev endpoints (/reset_prefix_cache etc.) for probe windows.
+[[ -n "${VLLM_SERVER_DEV_MODE:-}" ]] && EXTRA_ENVS+=(-e "VLLM_SERVER_DEV_MODE=$VLLM_SERVER_DEV_MODE")
 # NVFP4 KV lane (KV_DTYPE=nvfp4_ds_mla): the rope-less 304 B/token record
 # serves ONLY the dynamic per-token-scale mode; the engine refuses to boot
 # without this env, so forward it whenever set.
