@@ -146,6 +146,8 @@ _num_err() { echo "config error: $1 (nothing torn down)" >&2; exit 2; }
   || _num_err "MIXED_PREFILL_CAP='$MIXED_PREFILL_CAP' must be empty, -1 (skip), 0 (off), or a positive int"
 [[ -z "${MIXED_PREFILL_MAX_DEFER:-}" || "${MIXED_PREFILL_MAX_DEFER:-}" =~ ^(0|[1-9][0-9]*)$ ]] \
   || _num_err "MIXED_PREFILL_MAX_DEFER='$MIXED_PREFILL_MAX_DEFER' must be empty or a non-negative int"
+[[ -z "${MIXED_PREFILL_DECODE_WEIGHT:-}" || "${MIXED_PREFILL_DECODE_WEIGHT:-}" =~ ^[0-9]+(\.[0-9]+)?$ ]] \
+  || _num_err "MIXED_PREFILL_DECODE_WEIGHT='$MIXED_PREFILL_DECODE_WEIGHT' must be empty or a non-negative number"
 
 case "$NODE_RANK" in
   0) HOST_IP="$HEAD_RAIL_IP"; HEADLESS="" ;;
@@ -247,6 +249,12 @@ MIXED_PREFILL_CAP="${MIXED_PREFILL_CAP:-}"
 MIXED_PREFILL_MAX_DEFER="${MIXED_PREFILL_MAX_DEFER:-}"
 [[ -n "$MIXED_PREFILL_MAX_DEFER" ]] \
   && KDA_ARGS+=(--mixed-prefill-max-defer-steps "$MIXED_PREFILL_MAX_DEFER")
+# Dynamic time-share gate: weight w > 0 admits a mixed prefill chunk only
+# after decodes got w*D/P chunk-walls of decode-only time (1.0 = equal
+# per-request share). Requires MIXED_PREFILL_CAP=-1; supersedes MAX_DEFER.
+MIXED_PREFILL_DECODE_WEIGHT="${MIXED_PREFILL_DECODE_WEIGHT:-}"
+[[ -n "$MIXED_PREFILL_DECODE_WEIGHT" ]] \
+  && KDA_ARGS+=(--mixed-prefill-decode-weight "$MIXED_PREFILL_DECODE_WEIGHT")
 KV_ARGS=()
 [[ -n "$KV_DTYPE" ]] && KV_ARGS+=(--kv-cache-dtype "$KV_DTYPE")
 # Attention backend. B12X_MLA_SPARSE (GLM_NEXT lane, baked default since the
