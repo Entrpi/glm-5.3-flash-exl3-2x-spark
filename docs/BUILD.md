@@ -8,7 +8,7 @@ local-inference-lab, eugr, or NVIDIA.
 | | |
 |---|---|
 | Tag | `ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v2.3-tier1` |
-| Digest | `DIGEST_TBD` (`:v2.3-tier1` = `:latest` once pushed) |
+| Digest | `sha256:44b2dbafe8d81d6c7019a346480b49b23c1a0bef99c9b1d0db6e7ccc926921ca` (`:v2.3-tier1` = `:latest`) |
 | Base image | `nvidia/cuda:13.0.2-base-ubuntu24.04` (aarch64; slim rebase — the JIT toolchain is copied from the devel build donor) |
 | Arch | linux/arm64, CUDA kernels compiled for `12.1a` (GB10 / sm_121) |
 
