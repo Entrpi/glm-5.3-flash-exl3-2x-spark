@@ -7,7 +7,7 @@ on one reference kit). Not an official release of any upstream project.
 
 **Image and digest:**
 `ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v2.2-ring` (= `:latest`)
-digest `DIGEST_TBD`
+digest `sha256:2a2874f0d70e036e7ec47aa635b5ad24d903a0bbf3622b371cd879bfd672ad02`
 (previous: `:v2.1-finegrain`
 `sha256:50148c7b44e9121470e9735f24fb364fdf591718782fffb6a96c01b5a09bfc16`,
 `:v2-glmnext`
