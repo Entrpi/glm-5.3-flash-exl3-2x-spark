@@ -150,7 +150,7 @@ headroom with [tools/memlog.sh](tools/memlog.sh) before raising anything.
 | Update | `./install.sh` again pulls the current image; to pin a specific one, set `IMAGE=ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:<tag>` on both launches |
 | Roll back | `IMAGE=ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v2.2-ring VLLM_USE_B12X_FP8_GEMM=0 VLLM_DFLASH_FP8_DRAFT_HEAD=0` on both launches |
 | Per-box config | `~/.glm53-serve.env` (written from `.env` on every install run, so keep your changes in `.env`); command-line variables always win |
-| Upgrade from an earlier release | `git pull`; in `.env` remove any `IMAGE=` line and any `GLM53_TOPK_FIX_SO`; move aside any `~/glm53-hotfix*` directories on both boxes (the installer stops if they exist); then `./install.sh --skip-download`, optionally with `--prune-old-images` to reclaim ~18 GiB per superseded release on each box. Pins to older images are refused with the fix printed |
+| Upgrade from an earlier release | `git pull`; in `.env` remove any `IMAGE=` line and any `GLM53_TOPK_FIX_SO`; move aside any `~/glm53-hotfix*` directories on both boxes (the installer stops if they exist); then `./install.sh`, optionally with `--prune-old-images` to reclaim ~18 GiB per superseded release on each box. The model weights are detected and reused; the 1.3 GiB drafter copy is fetched, after which the old `~/models/glm53-dflash2` (2.3 GiB, both boxes) can be deleted. Pins to older images are refused with the fix printed |
 | Verify an image | `bash scripts/check_image.sh` (self-containment) and `bash scripts/run_tests.sh` (87 unit tests inside the image; run while the GPUs are free) |
 
 ## Measured performance
