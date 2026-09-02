@@ -217,6 +217,11 @@ EXTRA_ENVS=()
 # (M=32 rows takes a different b12x tile path). Off until the per-M dispatch
 # lands; VLLM_USE_B12X_FP8_GEMM=1 turns it on.
 [[ -n "${VLLM_USE_B12X_FP8_GEMM:-}" ]] && EXTRA_ENVS+=(-e "VLLM_USE_B12X_FP8_GEMM=$VLLM_USE_B12X_FP8_GEMM")
+# Row-count ceiling for that GEMM (v2.3 images: rows above it fall back to
+# the FlashInfer kernel; default 16) and the opt-in rowwise-fp8 draft head
+# (v2.3 images; -1 ms/step, +317 MB per rank, draft-time only).
+[[ -n "${VLLM_B12X_MXFP8_MAX_M:-}" ]] && EXTRA_ENVS+=(-e "VLLM_B12X_MXFP8_MAX_M=$VLLM_B12X_MXFP8_MAX_M")
+[[ -n "${VLLM_DFLASH_FP8_DRAFT_HEAD:-}" ]] && EXTRA_ENVS+=(-e "VLLM_DFLASH_FP8_DRAFT_HEAD=$VLLM_DFLASH_FP8_DRAFT_HEAD")
 if [[ "$WEIGHTS_MODE" == "local" || "$NODE_RANK" == "1" ]]; then
   test -f "$MODEL_HOST_PATH/config.json" || {
     echo "EXL3 weights not found at $MODEL_HOST_PATH (run install.sh, or set MODEL_HOST_PATH)" >&2

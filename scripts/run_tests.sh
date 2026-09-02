@@ -33,4 +33,6 @@ python3 -m pytest \
   tests/v1/core/test_scheduler_mixed_prefill.py \
   "tests/v1/core/test_prefix_caching.py::test_refresh_cached_free_blocks" \
   tests/transformers_utils/test_glm5next_chat_template.py \
+  tests/model_executor/test_top_k_local_logits.py \
+  tests/model_executor/test_b12x_mxfp8_dispatch.py \
   -q --no-header 2>&1 | tail -5'
