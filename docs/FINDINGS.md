@@ -481,15 +481,138 @@ behavior. Divergent-tail requests (shared doc, different question)
 reuse the same boundary states. Interior odd 2304-units have no
 stored state by design; block boundaries and producer tails do.
 
+## 17. v2.2: the spec-state ring, fair mixed prefill, state retention, and a right-sized workspace (2026-09-02)
+
+Four engine changes ship in `v2.2-ring` (fork `fdf56c9be`, 13 commits on
+`1d220461f`); each was gated live on the reference pair.
+
+**The spec-state ring removes DFlash2's pool tax (§15).** Speculative
+decode on the hybrid stack needs k scratch recurrent states per request
+per mamba group; the align-mode layout took them as (k+1) pool blocks × 3
+groups of 4608-token blocks — ~25 blocks (~110k pool tokens) per running
+request, context-independent. v2.2 stamps `spec_state_carveout` on the
+mamba KV spec at group build: the scheduler allocates exactly the
+drafterless layout (zero spec tail), and the worker splices columns 1..k
+of the mamba block table to ring pages carved past the pool inside the
+MLA tensors — one page per (slot, spec position, layer), keyed by the
+runner's persistent request slot (the pre-copy reads the previous step's
+accepted state, so batch-row keying would corrupt). The fused
+pre-copy/post-process kernels resolve temporal sources with a positive
+token bias through the ring; every destination and the conv shifts stay
+table-resolved. The carve is a fixed cost charged inside the KV budget
+and scaled by `MAX_SEQS` (≈2.5 GiB with the draft ring at the default 4
+slots; ~9 GiB at 16), counted by the memory check at boot.
+
+Receipts (production config unless noted): pool 1,324,163 → 1,051,936 at
+the 12.4 GB pin (the carve, as sized) — the 14.4 GB default (below)
+brings it to 1,287,194; tail-hit accepts 7.65/7.65 per 8 (= v2.1); 4-way
+and 8-way concurrent decodes clean; math_500 n=50 42/50 (band 40–44);
+`MAX_SEQS=16` at 131k boots (before, 384 spec blocks exceeded the whole
+pool). The §15 sweep completes:
+
+| c | DFlash2 + ring | drafterless | MTP-4 |
+|---|---:|---:|---:|
+| 4 | **50.9** (accept 2.96) | 47.5 | 48.0 |
+| 8 | 58.1 (2.61) | **70.8** | 68.9 |
+| 12 | 72.5 (2.52) | **87.8** | 82.1 |
+| 16 | 69.3 (2.58) | **103.0** | 95.2 |
+
+(aggregate decode tok/s, unique 16k contexts, greedy, 60 s windows, 0
+preemptions; ring arm at `MAX_SEQS=16 MNBT=4096 MAX_LEN=131072
+KV_CACHE_MEMORY=18e9`, pool 322k.) The capacity wall is gone — every cell
+admits — but the k=7 draft-and-verify step costs ~3.9× a plain decode
+step at 16 streams while earning ~2.6× tokens, so DFlash2 peaks at c12
+and drafterless keeps winning from c≥8. The ring makes DFlash2 *feasible*
+at high concurrency, not preferable: the agentic profile stays
+`SPEC=none`. Pin guidance: 16 streams at 131k need ≥16.5e9; sixteen 16k
+contexts took 18e9 for a 322k pool.
+
+**Fair mixed prefill: a dynamic time-share gate composed with a
+sub-block cap.** §15's skip mode held decode at 39% of solo speed with
+~3 s stalls per admitted chunk, because every mixed chunk was a full
+4608-token mamba block (the splitter floored sub-block chunks to the
+block grid — which is why caps under 4608 measured useless). v2.2 (a)
+adds `--mixed-prefill-decode-weight w`: a peer prefill chunk is admitted
+once decode-only steps have accumulated w·D/P chunk-walls (w=1 is
+processor-sharing fairness across requests; walls are accounted per
+completed step in `update_from_output`, because async scheduling
+misattributes schedule-interval timing — the naive version measured a
+7–14% decode share), and (b) lets a deliberately capped chunk advance
+sub-block through the existing private-running-state path, re-aligning at
+the next boundary (token-budget crumbs still floor, so boundary states
+still materialize). Measured stall quantum: 2.9–3.2 s at 4608 → 1.00 s
+at cap 1024 → 0.57 s at cap 512; marginal mixed-prefill service rate
+1522 tok/s at 4608 (−4% vs 1591 warm solo) vs ~1160 at both 1024 and 512
+(−27%, flat below 1024 — so 512 halves the stall at no extra cost).
+Scorecard against constructed ideals (decode: D/(D+1) of solo decode
+plus the piggyback iteration inside each mixed step; prefill: warm solo
+/ (D+1)), D concurrent decode streams vs one cold 65k prefill:
+
+| arm | D=1 decode / prefill | D=2 | D=3 |
+|---|---|---|---|
+| `WEIGHT=1.0 CAP=512` | 91% / 63% | 86% / 78% | 85% / 82% |
+| `WEIGHT=1.0 CAP=1024` | 85% / 75% | 82% / 102% | 90% / 109% |
+| `WEIGHT=1.0` skip mode | 66–83% decode, 118–143% prefill (over-serves prefill) |
+
+Accepts flat 6.8–7.0 throughout; solo prefills untouched; zero cost when
+uncontended. Kit recommendation for interactive/agentic serving:
+`MIXED_PREFILL_DECODE_WEIGHT=1.0 MIXED_PREFILL_CAP=512` (CAP=1024 is the
+balanced alternative). Off by default. A variant charging only the
+chunk's marginal wall was tested and reverted — it over-corrects under
+load (decode 91/86/85% → 83/77/76%).
+
+**State retention: re-age boundary states at retirement.** The
+under-load zero of §16's warm hits was queue age, not capacity: align
+mode frees interior boundary-state blocks mid-request (LRU-oldest) while
+the attention prefix is freed at retirement (young), so churn recycled the
+state first and the joint hybrid hit zeroed. v2.2 tracks hash-cached
+blocks freed early and moves identity-verified survivors to the LRU-young
+end when the request retires (latest boundary first), and fixes a
+pin-order bug that made the producer prompt-tail state the request's
+first-evicted block. A/B at `KV_CACHE_MEMORY=8e9` (51k doc, 20k
+sub-prefix, 6.6k-token fillers): baked v2.1 held 13,824 warm tokens
+through 22 fillers then zeroed at 26 (wall 4.9 → 13.8 s); v2.2 held
+through 24, stepped down one boundary (9,216; wall 7.8 s) at 26, zero at
+28. Exact-extension turns were already protected by touch-and-retire;
+the value case is sub-prefix / divergent-tail reuse.
+
+**Right-sized indexer workspace → the 14.4 GB KV default.** The glm5next
+sparse indexer sized its prefill K-gather workspace at `max_model_len ×
+40` entries (132 B each, 2.58 GiB at 524k) where the deepseek_v4 call
+site divides by the compress ratio — found by MiaAI-Lab (#86, credit).
+v2.2 bounds it by the legal per-step maximum, min(max_num_seqs, MNBT) ×
+cdiv(max_model_len + spec, kpool) = 66 MiB at the production shape, with
+a fail-closed assert at the workspace slice; ~2.5 GiB reclaimed per rank.
+Receipts (pre-ring): pin 12.4e9 → pool 1,324,163 unchanged; 14.4e9 →
+1,559,420 (+17.8%); 14.9e9 → 1,619,915 (+22.3%). Net accounting against
+the weeks-stable production footprint: stock + 12.4 ≈ fix + 14.9, so
+**14.4e9 nets ~0.5 GiB more headroom than the old pin** and becomes the
+default; 14.9e9 is the aggressive option. With the ring's carve inside
+the same budget, the v2.2 default pool is 1,287,194 tokens (2.46 × 524k
+banks). Read against v2.1's 1,324,163: the idle pool is 2.8% smaller, but
+v2.1 also charged ~115k pool tokens per *running* speculative request
+(4 streams: ~864k left for context), while v2.2 charges nothing per
+request — every running configuration has more context capacity than
+before, and only the fully idle prefix-cache capacity gives up 2.8%.
+
+**Fine-grained hashing at 512.** `PREFIX_MATCH_UNIT=512` (from 2304)
+puts warm-hit floors on a 512 grid (tail-hit probe 6,912 → 7,168 and
+11,520 → 12,288 warm tokens) at no measured hash-CPU cost (cold 65k
+prefill 1,658 tok/s, the best recorded), accepts 7.65–7.76/8. Default
+since v2.2; the 2048-token draft reserve of §16 still applies.
+
 ## Production recommendation
 
 Serve the GLM_NEXT lane (ratified default 2026-08-30):
 `ATTN_BACKEND=B12X_MLA_SPARSE KV_DTYPE=fp8_ds_mla
 KV_SKIP_LAYERS=sliding_window`, 524k context, DFlash2 k=7, CUDA graphs,
-MNBT 8192, KV budget 12.4 GB, gmu 0.85, `SKIP_MM_PROFILING=1`, thinking
-off at the serving layer. The `v2-glmnext` image bakes the whole lane (fork
-@ `c83d60a5b` + b12x `glm-next-backport`); on the older `v1-dflash2` it
-required hotfix overlays. The fp8_e4m3 lane (no overlay needed) remains fully
+MNBT 8192, KV budget 14.4 GB (v2.2; 12.4 GB on v2.1 and older), prefix
+unit 512, gmu 0.85, `SKIP_MM_PROFILING=1`, thinking off at the serving
+layer. The `v2.2-ring` image bakes the whole lane (fork @ `fdf56c9be` +
+b12x `glm-next-backport`); `v2-glmnext` first baked it, and the older
+`v1-dflash2` required hotfix overlays. For interactive or agentic
+serving add `MIXED_PREFILL_DECODE_WEIGHT=1.0 MIXED_PREFILL_CAP=512`
+(§17). The fp8_e4m3 lane (no overlay needed) remains fully
 supported: drop the three env knobs. For math-heavy workloads the
 GLM_NEXT default now leads (91/100); the short-context bf16 profile
 (`MAX_LEN=131072 KV_DTYPE= ATTN_BACKEND= SKIP_MM_PROFILING=0

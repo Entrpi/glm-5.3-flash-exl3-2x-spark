@@ -3,22 +3,30 @@
 **Status: community derivative.** Not an official image of vLLM,
 local-inference-lab, eugr, or NVIDIA.
 
-## Identity (current: v2.1-finegrain)
+## Identity (current: v2.2-ring)
 
 | | |
 |---|---|
-| Tag | `ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v2.1-finegrain` |
-| Digest | `sha256:50148c7b44e9121470e9735f24fb364fdf591718782fffb6a96c01b5a09bfc16` (`:v2.1-finegrain` = `:latest`) |
+| Tag | `ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v2.2-ring` |
+| Digest | `DIGEST_TBD` (`:v2.2-ring` = `:latest`) |
 | Base image | `nvidia/cuda:13.0.2-base-ubuntu24.04` (aarch64; slim rebase — the JIT toolchain is copied from the devel build donor) |
 | Arch | linux/arm64, CUDA kernels compiled for `12.1a` (GB10 / sm_121) |
 
-Delta vs `v2-glmnext`: vLLM `1d220461f` (5 commits — fine-grained prefix
-reuse: ring-safe per-block CoW, draft-replay reserve + gap-aware restore
-guard, mamba eagle-backoff skip for DFlash, draft-spec restore window;
-all pure Python, kernels unchanged). Same 3-layer build, same b12x
-`3ce6115`, same FlashInfer 0.6.18 patches.
+Delta vs `v2.1-finegrain`: vLLM `fdf56c9be` (13 commits — the mamba
+spec-state ring (DFlash2/MTP scratch states move off the KV pool onto
+per-slot ring pages carved from the MLA tensors; the ~25-block-per-request
+pool tax is gone), the dynamic time-share mixed-prefill gate composed with
+a sub-block chunk cap, boundary-state retention (re-age at retirement),
+the indexer prefill-workspace right-size (MiaAI-Lab #86), the FWHT
+query-scale fusion and physical-storage pool-expansion riders; pure
+Python incl. Triton kernel edits — no CUDA rebuild). Same 3-layer build,
+same b12x `3ce6115`, same FlashInfer 0.6.18 patches.
 
-Previous: `:v2-glmnext`
+Previous: `:v2.1-finegrain`
+`sha256:50148c7b44e9121470e9735f24fb364fdf591718782fffb6a96c01b5a09bfc16`
+(vLLM `1d220461f` — fine-grained prefix reuse; pin
+`KV_CACHE_MEMORY=12400000000` on it, its indexer workspace is not
+right-sized), `:v2-glmnext`
 `sha256:8fd3892b8a222477678d1e447b8a388c7e2f47c64c4f862ccbc61723501d54e8`
 (vLLM `c83d60a5b`; the fine-grained default `PREFIX_MATCH_UNIT=2304` is
 ENGINE-FATAL on it — use `PREFIX_MATCH_UNIT=` there), and `:v1-dflash2`
@@ -39,7 +47,7 @@ Three layers:
 
    ```
    ./build-and-copy.sh -t vllm-node-glm53 --exp-b12x \
-       --vllm-source-dir <clone of Entrpi/vllm-glm-5.3-flash-spark @ 1d220461f> --rebuild-vllm
+       --vllm-source-dir <clone of Entrpi/vllm-glm-5.3-flash-spark @ fdf56c9be> --rebuild-vllm
    ```
 
    with the harness's b12x source pinned to
@@ -68,7 +76,7 @@ Three layers:
 
 | Component | Source | Ref |
 |---|---|---|
-| vLLM | [Entrpi/vllm-glm-5.3-flash-spark](https://github.com/Entrpi/vllm-glm-5.3-flash-spark) | `1d220461f` (branch `main`, full history incl. the local-inference-lab fork lineage) |
+| vLLM | [Entrpi/vllm-glm-5.3-flash-spark](https://github.com/Entrpi/vllm-glm-5.3-flash-spark) | `fdf56c9be` (the image's version stamp; branch `main` additionally carries the tests-only `de7428e35`; full history incl. the local-inference-lab fork lineage) |
 | b12x | [Entrpi/sparkinfer-glmrt](https://github.com/Entrpi/sparkinfer-glmrt) | branch `glm-next-backport` @ `3ce6115` (fork of tpurtell/sparkinfer-glmrt, lukealonso/b12x lineage) |
 | exllamav3 | [turboderp-org/exllamav3](https://github.com/turboderp-org/exllamav3) | `c5d9c657` |
 | FlashInfer | prebuilt 0.6.18 (`083012d6`) + the two sm12x patches above | — |
@@ -81,10 +89,12 @@ line is inherited; the table rows are what this branch introduces.
 
 ## Verification
 
-`scripts/check_image.sh` asserts the image is self-contained (15 checks:
-branch version stamp, DFlash2/ring code, chat templates incl. the thinking
-gate, exl3ext, b12x tree, FlashInfer patches). `scripts/run_tests.sh` runs
-the 41-test suite inside the pulled image. Serving-level validation
+`scripts/check_image.sh` asserts the image is self-contained (20 checks:
+branch version stamp, DFlash2/ring code, the v2.2 spec-state ring, share
+gate + chunk cap, retention and indexer-workspace markers, chat templates
+incl. the thinking gate, exl3ext, b12x tree, FlashInfer patches).
+`scripts/run_tests.sh` runs the 80-test suite inside the pulled
+image. Serving-level validation
 commands and results: README "Benchmarks" + "Reproducing".
 
 ## Support

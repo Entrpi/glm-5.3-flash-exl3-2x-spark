@@ -1,8 +1,8 @@
 #!/bin/bash
 # Phase 3 image self-containment gauntlet (no GPU needed).
-# Usage: bash check_image_phase3.sh [image]  (default vllm-node-glm53:v2-glmnext)
+# Usage: bash check_image.sh [image]  (default = the shipped v2.2-ring tag)
 set -u
-IMG="${1:-vllm-node-glm53:v2.1-glmnext}"
+IMG="${1:-ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v2.2-ring}"
 DP=/usr/local/lib/python3.12/dist-packages
 pass=0; fail=0
 chk() { # chk <label> <shell snippet that exits 0 on pass>
@@ -12,7 +12,7 @@ chk() { # chk <label> <shell snippet that exits 0 on pass>
     echo "FAIL: $1"; fail=$((fail+1))
   fi
 }
-EXPECT_COMMIT="${EXPECT_COMMIT:-1d220461f}"
+EXPECT_COMMIT="${EXPECT_COMMIT:-fdf56c9be}"
 chk "vllm version stamps $EXPECT_COMMIT" "pip show vllm | grep -q g$EXPECT_COMMIT"
 chk "mm jinja has thinking gate"         "grep -q thinking_enabled $DP/vllm/transformers_utils/chat_templates/template_glm5next_mm.jinja"
 chk "glm5next mm jinja packaged"        "test -f $DP/vllm/transformers_utils/chat_templates/template_glm5next_mm.jinja"
@@ -22,6 +22,11 @@ chk "DFlash2 speculator + ring remap"   "grep -q ring_remap_draft_block_tables $
 chk "DFlashSWASpec in kv_cache_interface" "grep -q DFlashSWASpec $DP/vllm/v1/kv_cache_interface.py"
 chk "ring lane in kv_cache_utils"       "grep -q _dflash_ring_pages $DP/vllm/v1/core/kv_cache_utils.py"
 chk "VLLM_DFLASH_KV_RING env"           "grep -q VLLM_DFLASH_KV_RING $DP/vllm/envs.py"
+chk "spec-state ring stamped on MambaSpec" "grep -q spec_state_carveout $DP/vllm/v1/kv_cache_interface.py"
+chk "VLLM_MAMBA_SPEC_CARVEOUT env"      "grep -q VLLM_MAMBA_SPEC_CARVEOUT $DP/vllm/envs.py"
+chk "share gate + chunk cap (scheduler)" "grep -q mixed_prefill_decode_weight $DP/vllm/config/scheduler.py && grep -q chunk_token_limit $DP/vllm/v1/core/sched/scheduler.py"
+chk "boundary-state re-aging (retention)" "grep -q refresh_cached_free_blocks $DP/vllm/v1/core/block_pool.py && grep -q _on_blocks_freed_early $DP/vllm/v1/core/single_type_kv_cache_manager.py"
+chk "indexer workspace right-sized"     "grep -q legal_max_entries $DP/vllm/models/glm5next/nvidia/attention.py"
 chk "exl3ext baked at /exl3ext"         "test -f /exl3ext/exllamav3_ext.cpython-312-aarch64-linux-gnu.so"
 chk "VLLM_EXL3_EXT_PATH env baked"      "test \"\$VLLM_EXL3_EXT_PATH\" = /exl3ext"
 chk "b12x = sparkinfer exl3 lane"       "grep -rq exl3_trellis_mcg $DP/b12x/"

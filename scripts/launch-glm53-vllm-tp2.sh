@@ -53,7 +53,7 @@ VOL_NAME="${VOL_NAME:-exl3weights}"
 MODEL_PATH="/models/glm53-exl3"
 
 # ---- serving knobs (defaults = the validated production configuration) -----
-IMAGE="${IMAGE:-ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v2.1-finegrain}"
+IMAGE="${IMAGE:-ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v2.2-ring}"
 NAME="${NAME:-vllm_glm53}"
 MAX_LEN="${MAX_LEN:-524288}"             # 500k default bank (2026-08-29);
                                          # 131072 was the pre-long-context
@@ -87,13 +87,20 @@ KV_DTYPE="${KV_DTYPE-fp8_ds_mla}"        # fp8_ds_mla (GLM_NEXT lane, baked
                                          # (1,435,070-token pool, 2.74 banks).
                                          # empty = bf16: pool ~520k tokens —
                                          # pair with MAX_LEN=131072.
-KV_CACHE_MEMORY="${KV_CACHE_MEMORY:-}"   # empty -> 12.4e9 (1,435,070 tokens
-                                         # @524k fp8 / 520,470 @131k bf16;
-                                         # 5.25 GiB measured head floor);
-                                         # "auto" -> vLLM budgeting;
-                                         # 13.4e9 gave 567k bf16 but collapsed
-                                         # the floor to 2.26 GiB — do NOT raise
-                                         # without re-measuring memory floors.
+KV_CACHE_MEMORY="${KV_CACHE_MEMORY:-}"   # empty -> 14.4e9 since v2.2: its vLLM
+                                         # right-sizes the sparse indexer's
+                                         # prefill workspace (~2.5 GiB back per
+                                         # rank), so 14.4e9 nets MORE headroom
+                                         # than the old 12.4e9 pin (README
+                                         # "Memory and context"; 14.9e9 = the
+                                         # aggressive option). On v2.1 and
+                                         # older images set
+                                         # KV_CACHE_MEMORY=12400000000 (5.25
+                                         # GiB measured head floor there).
+                                         # "auto" -> vLLM budgeting. Do NOT
+                                         # raise without re-measuring floors:
+                                         # 13.4e9 on v2.1 bought +47k tokens
+                                         # and collapsed the floor to 2.26 GiB.
 MNBT="${MNBT:-8192}"                     # --max-num-batched-tokens: 112k-prompt
                                          # TTFT 93s->54.7s vs engine default
 MM_CACHE_GB="${MM_CACHE_GB:-0.5}"        # mm processor cache (head-resident)
@@ -129,7 +136,7 @@ CACHE_HOST_PATH="${CACHE_HOST_PATH:-$HOME/glm53-vllm-cache}"
 if [[ "$KV_CACHE_MEMORY" == "auto" ]]; then
   KV_CACHE_MEMORY=""
 elif [[ -z "$KV_CACHE_MEMORY" ]]; then
-  KV_CACHE_MEMORY="12400000000"
+  KV_CACHE_MEMORY="14400000000"
 fi
 
 # Validate numeric knobs BEFORE any teardown: a typo'd value must not
@@ -232,12 +239,13 @@ elif [[ "$SPEC" == "dflash" ]]; then
 fi
 KDA_ARGS=()
 [[ -n "$KDA_PREFILL" ]] && KDA_ARGS=(--kda-prefill-backend "$KDA_PREFILL")
-# Prefix-cache hash granularity. Default 2304 = fine-grained hashing (v2.1:
-# sub-block prefix hits, producer-tail state reuse, agentic warm turns ~3-4x;
-# needs the v2.1+ image — the CoW/backoff fixes are engine-fatal-absent on
-# v2 and earlier). Explicit-empty (PREFIX_MATCH_UNIT=) restores the coarse
-# 4608 engine default.
-PREFIX_MATCH_UNIT="${PREFIX_MATCH_UNIT-2304}"
+# Prefix-cache hash granularity. Default 512 since v2.2 (2304 in v2.1): fine-
+# grained hashing — sub-block prefix hits, producer-tail state reuse, agentic
+# warm turns ~3-4x, warm-hit floors on a 512 grid at no measured hash-CPU cost
+# (FINDINGS §17). Needs the v2.1+ image — the CoW/backoff fixes are engine-
+# fatal-absent on v2 and earlier. Explicit-empty (PREFIX_MATCH_UNIT=) restores
+# the coarse 4608 engine default.
+PREFIX_MATCH_UNIT="${PREFIX_MATCH_UNIT-512}"
 [[ -n "$PREFIX_MATCH_UNIT" ]] && KDA_ARGS+=(--prefix-match-unit "$PREFIX_MATCH_UNIT")
 # Mixed-prefill decode floor: while anything is decoding, skip (-1) or cap
 # (N tokens) peer prefill chunks; solo prefills keep full MNBT chunks.
@@ -251,7 +259,10 @@ MIXED_PREFILL_MAX_DEFER="${MIXED_PREFILL_MAX_DEFER:-}"
   && KDA_ARGS+=(--mixed-prefill-max-defer-steps "$MIXED_PREFILL_MAX_DEFER")
 # Dynamic time-share gate: weight w > 0 admits a mixed prefill chunk only
 # after decodes got w*D/P chunk-walls of decode-only time (1.0 = equal
-# per-request share). Requires MIXED_PREFILL_CAP=-1; supersedes MAX_DEFER.
+# per-request share). With MIXED_PREFILL_CAP=-1 the gate skips; with a
+# positive CAP (> 64; v2.2+) the gate paces WHEN a peer chunk runs and the
+# cap sizes it — recommended interactive setting: WEIGHT=1.0 CAP=512
+# (0.57 s decode stalls, FINDINGS §17). Supersedes MAX_DEFER.
 MIXED_PREFILL_DECODE_WEIGHT="${MIXED_PREFILL_DECODE_WEIGHT:-}"
 [[ -n "$MIXED_PREFILL_DECODE_WEIGHT" ]] \
   && KDA_ARGS+=(--mixed-prefill-decode-weight "$MIXED_PREFILL_DECODE_WEIGHT")

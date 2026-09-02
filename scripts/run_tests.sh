@@ -7,7 +7,7 @@
 # The tests live in the vLLM branch repo; a shallow sparse clone of tests/
 # is cached under /tmp and reused.
 set -euo pipefail
-IMG="${IMG:-ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v2-glmnext}"
+IMG="${IMG:-ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v2.2-ring}"
 BRANCH_REPO="${BRANCH_REPO:-https://github.com/Entrpi/vllm-glm-5.3-flash-spark}"
 TESTS_DIR="${TESTS_DIR:-/tmp/glm53-vllm-tests}"
 
@@ -29,5 +29,8 @@ python3 -m pytest \
   "tests/test_config.py::test_dflash2_draft_forces_v2_model_runner" \
   "tests/v1/core/test_kv_cache_utils.py::test_glm5_grouping_with_dflash_draft_layers" \
   "tests/v1/core/test_kv_cache_utils.py::test_glm5_dflash_ring_backed_draft_kv" \
+  tests/v1/core/test_mamba_align_chunk_split.py \
+  tests/v1/core/test_scheduler_mixed_prefill.py \
+  "tests/v1/core/test_prefix_caching.py::test_refresh_cached_free_blocks" \
   tests/transformers_utils/test_glm5next_chat_template.py \
   -q --no-header 2>&1 | tail -5'

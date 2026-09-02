@@ -23,8 +23,8 @@ side-by-side.
 
 ## Convergent engineering
 
-Three problems have no upstream solution, and both projects independently
-solved all three:
+Four problems have no upstream solution, and both projects independently
+solved all four:
 
 1. **Drafter KV on the glm5 hybrid.** Both found that the drafter's plain
    sliding-window specs eject the model from the glm5 KV fast path onto a
@@ -37,9 +37,18 @@ solved all three:
 3. **Non-causal draft attention.** Both discovered (independently, on
    different backends) that a causal mask inside the draft block silently
    collapses later-position acceptance.
+4. **The kpool tail slot map.** The sparse indexer's compressed-KV pool
+   mis-addresses the last partial pool slot of a sequence; both stacks
+   clamp it (ours in `KpoolTailMetadataBuilder`, theirs as a slot-map
+   clamp in the same 2026-09 window).
 
-Independent replication of the same three fixes is strong evidence both
-stacks implement DFlash2-on-GLM-5.3 correctly.
+Independent replication of the same four fixes is strong evidence both
+stacks implement DFlash2-on-GLM-5.3 correctly. One fix crossed over
+directly: MiaAI-Lab's #86 found that the glm5next indexer sized its
+prefill K-gather workspace at the raw `max_model_len x 40` entries where
+the deepseek_v4 call site divides by the compress ratio; this kit adopted
+the right-sizing (fork `4b811c86a`, ~2.5 GiB reclaimed per rank at 524k,
+the source of the v2.2 14.4 GB KV default) with credit.
 
 ## Numbers, on their protocol
 

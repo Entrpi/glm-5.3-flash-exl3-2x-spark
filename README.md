@@ -14,8 +14,10 @@ report problems on [this repo's issue tracker](https://github.com/Entrpi/glm-5.3
 the ratified default — 524k context, GLM_NEXT b12x lane with packed fp8
 KV, MXFP8 DFlash2 drafter): **31.2 tok/s** single-stream prose decode,
 **~72–75 tok/s** on high-acceptance structured output, TTFT
-**0.38–0.41 s**, **1,324,163-token KV pool** (2.53 concurrent 524k
-banks; 1,858,451 drafterless), 133k-token prefill in **89 s** and a
+**0.38–0.41 s**, **1,287,194-token KV pool** at the v2.2 default (2.46
+concurrent 524k banks with the spec-state ring at 14.4 GB, and no
+per-request spec-state tax on top; 1,324,163 on v2–v2.1 at 12.4 GB,
+1,858,451 drafterless), 133k-token prefill in **89 s** and a
 **full 499k bank in 6.5 min (1,277 tok/s, needle-exact at that depth)**,
 math_500 **91%** (n=100), gpqa_diamond 70%, estonia 133k retrieval
 **10/10**, lavd ledger audit **15/30 EXACT** (3× the fp8_e4m3 lane),
@@ -25,7 +27,15 @@ pool to **1,702,584 tokens (3.25 banks)**, and the **native-1M profile
 serves 1,048,576-token context with 2.05 concurrent full banks** —
 needle-exact at 875k depth, decode flat at full depth, ~15 min per cold
 1M prefill (FINDINGS §13). All of this is baked into the shipped
-`v2.1-finegrain` image, which adds fine-grained prefix reuse on top of
+`v2.2-ring` image. v2.2 moves DFlash2's speculative scratch states off
+the KV pool onto a per-slot ring (the ~25-block-per-request pool tax of
+§15 is gone — DFlash2 now boots at 16 concurrent streams), adds a fair
+mixed-prefill scheduler (decode keeps 85–91% of its fair share while a
+cold prefill runs, with 0.57 s stalls instead of ~3 s), re-ages boundary
+states so sub-prefix reuse degrades gracefully instead of zeroing under
+churn, and right-sizes the sparse indexer's prefill workspace — which
+pays for a **14.4 GB KV default** (pool 1,287,194 tokens at 524k,
+FINDINGS §17). v2.1 added fine-grained prefix reuse on top of
 `v2-glmnext` — warm agentic turns run ~3.9× faster (3.0-3.2 s vs ~12 s
 at 12-17k context, FINDINGS §16). (On the older `v1-dflash2` these
 lanes needed hotfix overlays.) (Numbers published before 2026-08-29 came from an
@@ -84,15 +94,17 @@ Variants:
 ## Memory and context
 
 Serving defaults to a **524,288-token context** with fp8 KV (since
-2026-08-29). Measured pools on this stack, all at the same pinned 12.4 GB
-KV budget:
+2026-08-29). Measured pools on this stack, at the pinned KV budget of
+their era (12.4 GB through `v2.1-finegrain`; 14.4 GB since `v2.2-ring`,
+see below):
 
 | Configuration | KV pool (tokens) | Concurrency @max-len | Notes |
 |---|---:|---:|---|
 | **Native 1M: `MAX_LEN=1048576`, DFlash2 + `nvfp4_ds_mla` KV** | **2,144,814** | 2.05× | two concurrent full-length native-1M banks (FINDINGS §13); needs the NVFP4 lane (the `persistent_topk` retry fix is baked since `v2-glmnext`; on `v1-dflash2` load `GLM53_TOPK_FIX_SO`); ~15 min per cold 1M prefill, run with `MNBT=4096` |
 | Native 1M, DFlash2 + `fp8_ds_mla` KV | 1,530,144 | 1.46× | the default KV format also serves the full native declaration (topk fix required): one 1M bank plus ~480k spare; cold 1.03M prefill 1,251 tok/s, needle-exact |
 | 524k, DFlash2 + `nvfp4_ds_mla` KV | 1,702,584 | 3.25× | rope-less 304 B/token records with a dynamic per-token scale (`VLLM_NVFP4_MLA_DYNAMIC_SCALE=1`, no calibration file); quality between the two fp8 lanes (math 88, lavd 10 EXACT) |
-| **GLM_NEXT lane: 524k, DFlash2 + `fp8_ds_mla` KV** | **1,324,163** | 2.53× | **the baked default since the `v2-glmnext` image** (ratified 2026-08-30; b12x 528 B/token packed records). Drafterless pool: 1,858,451 (the deficit vs the row below is entirely the draft ring-KV running bf16 under the skip mechanism) |
+| **v2.2 default: 524k, DFlash2 + `fp8_ds_mla` KV, 14.4 GB pin, spec-state ring** | **1,287,194** | 2.46× | **the baked default since `v2.2-ring`**: the ring takes DFlash2's per-request spec-state tax out of the pool (a fixed carve — 4 slots × 7 states × 34 layers, ≈2.5 GiB with the draft ring at `MAX_SEQS=4` — is charged inside the budget instead) and the right-sized indexer workspace funds the +2 GB pin (FINDINGS §17) |
+| GLM_NEXT lane: 524k, DFlash2 + `fp8_ds_mla` KV, 12.4 GB pin | 1,324,163 | 2.53× | the baked default from `v2-glmnext` through `v2.1-finegrain` (ratified 2026-08-30; b12x 528 B/token packed records). Drafterless pool: 1,858,451 (the deficit vs the row below is entirely the draft ring-KV running bf16 under the skip mechanism) |
 | 524k, DFlash2 + `fp8_e4m3` KV | 1,435,070 | 2.74× | the 2026-08-29 default (`KV_DTYPE=fp8_e4m3 ATTN_BACKEND= KV_SKIP_LAYERS=`); vLLM auto-bumps the KV block to 4608 for KDA/attention page parity |
 | 358k, DFlash2 + fp8 | 1,275,306 | 3.56× | `MAX_LEN=358400` — more concurrency headroom |
 | 131k short-context mode, bf16 KV | 520,470 | 3.97× | `MAX_LEN=131072 KV_DTYPE= ATTN_BACKEND= SKIP_MM_PROFILING=0 MAX_SEQS=6` — the pre-2026-08-29 default; math parity with fp8 (86 vs 87 n=100) |
@@ -108,16 +120,26 @@ measurement era; the current band is 86–88% at either dtype). bf16
 cannot reach the long banks — its pool is ~0.99× a single 524k request. Estonia prefill: 133,186 tokens at
 ~1,400 tok/s through the default 8192-token chunks.
 
-The 12.4 GB KV budget is pinned deliberately. Explicit budgets bypass vLLM's
-memory profiling reserve, and GB10 unified memory does not fail gracefully —
-it swap-wedges. The pinned value keeps a **measured 5.25 GiB minimum free**
-on the memory-binding box under saturation plus a 112k-token prefill.
+The KV budget is pinned deliberately (**14.4 GB since v2.2**; 12.4 GB
+through v2.1). Explicit budgets bypass vLLM's memory profiling reserve, and
+GB10 unified memory does not fail gracefully — it swap-wedges. The 12.4 GB
+pin kept a **measured 5.25 GiB minimum free** on the memory-binding box
+under saturation plus a 112k-token prefill. v2.2's vLLM right-sizes the
+sparse indexer's prefill K-gather workspace (2.58 GiB → 66 MiB per rank at
+the production shape — the call-site asymmetry was found by MiaAI-Lab's
+#86), so by net accounting against the weeks-stable production footprint
+14.4 GB leaves ~0.5 GiB *more* headroom than the old pin did (14.9 GB is
+the break-even, documented as the aggressive option). On v2.1 and older
+images keep `KV_CACHE_MEMORY=12400000000`.
 
-> Raising the budget is non-linear: 13.4 GB bought +47k tokens but collapsed
-> the measured floor from 5.25 GiB to 2.26 GiB. Do not raise
+> Raising the budget is non-linear: on v2.1, 13.4 GB bought +47k tokens but
+> collapsed the measured floor from 5.25 GiB to 2.26 GiB. Do not raise
 > `KV_CACHE_MEMORY` or `GMU` without re-running the floor methodology
 > ([tools/memlog.sh](tools/memlog.sh)) — floors also degrade 1.5–2 GiB per
-> day of workload, so fresh-boot numbers are optimistic.
+> day of workload, so fresh-boot numbers are optimistic, and on GB10
+> unified memory `MemAvailable` floors are a weak signal for sub-GiB
+> deltas (page-cache noise swamps them) — compare net footprints against a
+> known-stable configuration instead.
 
 > **Weight load uses direct I/O by default** (`LOAD_FORMAT=instanttensor`,
 > the launcher default since 2026-08-31): it bypasses the page cache, cuts
@@ -155,13 +177,13 @@ compilation. JIT caches persist across relaunches
 |---|---|---|
 | **NVFP4 KV** | GLM_NEXT lane knobs + `KV_DTYPE=nvfp4_ds_mla VLLM_NVFP4_MLA_DYNAMIC_SCALE=1` | +28.6% pool (3.25 × 524k banks) at a small quality cost vs `fp8_ds_mla` (FINDINGS §13); dynamic per-token scales, no calibration file |
 | **Native 1M** | NVFP4 knobs + `MAX_LEN=1048576 MNBT=4096` (on `v1-dflash2` also `GLM53_TOPK_FIX_SO=/cache/topk_fix.so`; baked since `v2-glmnext`) | 2.05 concurrent 1M banks; needle-exact at 875k depth, decode flat at full depth; ~15 min cold 1M prefill (FINDINGS §13) |
-| **Shipped-image default (GLM_NEXT b12x lane)** | (nothing) | 524k context, DFlash2 k=7 + `fp8_ds_mla` packed KV + `B12X_MLA_SPARSE` + CUDA graphs + fine-grained prefix reuse (`--prefix-match-unit 2304`, since `v2.1-finegrain`: warm agentic turns ~3.9×, FINDINGS §16; `PREFIX_MATCH_UNIT=` restores coarse) — lane ratified 2026-08-30, beats the fp8_e4m3 lane on every quality and speed gate (FINDINGS §12). On the older `v1-dflash2` image the lane needs the hotfix overlays |
+| **Shipped-image default (GLM_NEXT b12x lane)** | (nothing) | 524k context, DFlash2 k=7 + `fp8_ds_mla` packed KV + `B12X_MLA_SPARSE` + CUDA graphs + fine-grained prefix reuse (`--prefix-match-unit 512` since `v2.2-ring`, 2304 in v2.1: warm agentic turns ~3.9×, FINDINGS §16–17; `PREFIX_MATCH_UNIT=` restores coarse) + the spec-state ring (v2.2, §17) — lane ratified 2026-08-30, beats the fp8_e4m3 lane on every quality and speed gate (FINDINGS §12). On the older `v1-dflash2` image the lane needs the hotfix overlays |
 | fp8_e4m3 lane | `KV_DTYPE=fp8_e4m3 ATTN_BACKEND= KV_SKIP_LAYERS=` on both launches | the 2026-08-29 default — 2.74 concurrent full banks; also the profile fully baked into `v1-dflash2` |
 | Short-context bf16 | `MAX_LEN=131072 KV_DTYPE= ATTN_BACKEND= SKIP_MM_PROFILING=0 MAX_SEQS=6` on both launches | the pre-2026-08-29 production config; 131k context |
 | MTP fallback | `MTP=4` on both launches | if the drafter ever misbehaves; ~21% slower |
 | No speculation | `SPEC=none` | maximum KV pool, debugging — but NOT at 524k declared: with ≤4 decode rows the `persistent_topk` small-batch heuristic oversubscribes sm121 (FINDINGS §12); cap `MAX_LEN` ≤ ~358k for drafterless runs |
-| **Agentic / high concurrency** | `MAX_LEN=131072`–`262144 MAX_SEQS=12`–`16 MNBT=4096 SPEC=none MIXED_PREFILL_CAP=-1` | many concurrent mid-length streams; the knee is above c=16 (FINDINGS §15). DFlash2 is the wrong speculator here — it pins ~24 pool blocks per running request (§15); use `MTP=4` at the smaller end if you want speculation |
-| Interactive decode floor | `MIXED_PREFILL_CAP=-1` on top of any profile | keeps decode at ~39% of solo speed while cold prefills run (vs 5% default) for 1.40× their TTFT; solo prefills unaffected (FINDINGS §15) |
+| **Agentic / high concurrency** | `MAX_LEN=131072`–`262144 MAX_SEQS=12`–`16 MNBT=4096 SPEC=none MIXED_PREFILL_DECODE_WEIGHT=1.0 MIXED_PREFILL_CAP=512` | many concurrent mid-length streams; the knee is above c=16 (FINDINGS §15). Since v2.2 DFlash2 boots at 16 streams (the ring removed its pool tax) but drafterless still decodes faster from c≥8 (70.8/87.8/103.0 vs 58.1/72.5/69.3 tok/s at c8/12/16, §17) — keep `SPEC=none`, or `MTP=4` at the smaller end. Budget the pin: the ring's fixed costs scale with `MAX_SEQS` (16 streams at 131k need `KV_CACHE_MEMORY>=16500000000`; sixteen 16k contexts took 18e9); a `_check_enough_kv_cache_memory` error at boot is the tell |
+| Interactive decode floor | `MIXED_PREFILL_DECODE_WEIGHT=1.0 MIXED_PREFILL_CAP=512` on top of any profile | decode keeps 85–91% of its fair (processor-sharing) share while cold prefills run, with 0.57 s stalls instead of ~3 s; prefill gets 63–82% of its share; zero cost when uncontended (§17). `MIXED_PREFILL_CAP=-1` alone is the v2 legacy skip mode (39% of solo decode, 3 s stalls, §15). Off by default |
 
 Thinking is **off by default** at the serving layer
 (`--default-chat-template-kwargs '{"enable_thinking": false}'`); enable per
@@ -266,8 +288,13 @@ kpool-compressed sparse attention. Introduced by this branch:
 | Ring draft KV | fixed-size ring-backed draft KV: `1 + max_seqs × R` pages total + a positional remap kernel — recovers the pool DFlash2 otherwise costs (329k → 520k tokens) |
 | Chat template | multimodal template repair for text-only-template checkpoints + `enable_thinking` gating (reasoning never leaks into `content`) |
 | FlashInfer sm12x | fp8-MLA gate + `CTA_TILE_KV` cap patches (live-validated; required only for the fp8-KV option) |
+| Fine-grained prefix reuse (v2.1) | `--prefix-match-unit` below the 4608-token mamba block: ring-safe per-block CoW, draft-replay reserve + gap-aware restore guard, mamba eagle-backoff fix — every complete boundary state hittable (FINDINGS §16) |
+| Spec-state ring (v2.2) | DFlash2/MTP mamba scratch states move from pool blocks to per-slot ring pages carved from the MLA tensors (`spec_state_carveout` stamped on the mamba KV spec; scheduler layout ≡ drafterless; worker block-table splice + ring-aware fused state copies) — removes the ~25-block-per-request pool tax (§17) |
+| Fair mixed prefill (v2.2) | dynamic time-share gate (`--mixed-prefill-decode-weight`) composed with a sub-block chunk cap (`--mixed-prefill-token-cap`): the gate paces when a peer chunk runs, the cap sizes it, and the mamba-aligned splitter lets capped chunks advance sub-block (§17) |
+| State retention (v2.2) | hash-cached boundary states freed early mid-request are re-aged at retirement (LRU-young), so sub-prefix reuse degrades from the tail instead of zeroing under churn (§17) |
+| Indexer workspace (v2.2) | sparse-indexer prefill K-gather workspace bounded by the legal per-step maximum (MiaAI-Lab #86 credit) — ~2.5 GiB reclaimed per rank at 524k; fail-closed assert at the slice |
 
-41 unit tests covering the above run in the pulled image:
+80 unit tests covering the above run in the pulled image:
 [scripts/run_tests.sh](scripts/run_tests.sh).
 
 ## Repo layout
@@ -285,7 +312,7 @@ scripts/
   warm_prefix_test.py           prefix-cache + drafting interaction test
   accept_ab_matrix.py           temp x thinking acceptance A/B
   check_image.sh                image self-containment verification
-  run_tests.sh                  41-test suite inside the pulled image
+  run_tests.sh                  80-test suite inside the pulled image
 tools/
   dflash_equiv.py               speculative-equivalence harness (rescoring)
   memlog.sh                     1 Hz memory-floor sampler
