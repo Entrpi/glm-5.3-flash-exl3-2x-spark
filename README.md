@@ -148,9 +148,10 @@ headroom with [tools/memlog.sh](tools/memlog.sh) before raising anything.
 | Restart | on the head `docker rm -f vllm_glm53`, then on the worker `~/launch-glm53-vllm-tp2.sh 1`, then on the head `~/launch-glm53-vllm-tp2.sh 0` (always head down first, worker up first; ~4 min to a live API) |
 | Warm-up | `~/glm53-warmup.sh` after a restart compiles the hot shapes so the first real request does not pay ~7 s |
 | Update | `./install.sh` again pulls the current image; to pin a specific one, set `IMAGE=ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:<tag>` on both launches |
-| Roll back | `IMAGE=ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v2.2-ring VLLM_USE_B12X_FP8_GEMM=0 VLLM_DFLASH_FP8_DRAFT_HEAD=0` on both launches |
+| Roll back | `./install.sh --rollback` restores the previous release's files on both boxes and relaunches it (the installer keeps them at every upgrade). By hand: `IMAGE=ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v2.2-ring VLLM_USE_B12X_FP8_GEMM=0 VLLM_DFLASH_FP8_DRAFT_HEAD=0` on both launches |
+| Check for a newer release | `./install.sh --check-update` (or `--version` for what is installed). The launcher also checks once a day at start and prints one line if a newer release exists; `GLM53_NO_UPDATE_CHECK=1` in `.env` turns that off |
 | Per-box config | `~/.glm53-serve.env` (written from `.env` on every install run, so keep your changes in `.env`); command-line variables always win |
-| Upgrade from an earlier release | `git pull`; in `.env` remove any `IMAGE=` line and any `GLM53_TOPK_FIX_SO`; move aside any `~/glm53-hotfix*` directories on both boxes (the installer stops if they exist); then `./install.sh`, optionally with `--prune-old-images` to reclaim ~18 GiB per superseded release on each box. The model weights are detected and reused; the 1.3 GiB drafter copy is fetched, after which the old `~/models/glm53-dflash2` (2.3 GiB, both boxes) can be deleted. Pins to older images are refused with the fix printed |
+| Upgrade from an earlier release | `git pull`, then `./install.sh`. Before changing anything it shows what it will do: the release you have and the one you get, downloads, the serve-config diff, leftovers (superseded images, the old 2.3 GiB drafter directory) and notes on stale `.env` settings such as an `IMAGE=` pin or a retired key; `--yes` skips the question. The previous release is kept and restored automatically if the new one does not come up (`--no-rollback` keeps a failed boot for debugging). After a successful start it offers to remove leftovers of earlier releases (superseded images, ~18 GiB each per box, and the old 2.3 GiB drafter directory); `--remove-old` / `--keep-old` answer that without a prompt. Hotfix overlay directories from v1 (`~/glm53-hotfix*`) stop the installer until moved aside |
 | Verify an image | `bash scripts/check_image.sh` (self-containment) and `bash scripts/run_tests.sh` (87 unit tests inside the image; run while the GPUs are free) |
 
 ## Measured performance
@@ -287,6 +288,15 @@ docs/
   BUILD.md                      image provenance: commits, build args, patches
   ANNOUNCEMENT.md               community publishing disclosure
 ```
+
+## Update check
+
+At start, the head's launcher reads one line (the current release name) from
+this repository at most once a day and prints an upgrade hint if it is newer
+than the release you have. Nothing about your machine or usage is sent, the
+check has a 3 s timeout and never affects the launch. Turn it off with
+`GLM53_NO_UPDATE_CHECK=1` in `.env`. `./install.sh --check-update` does the
+same on demand and `./install.sh --version` shows what is installed.
 
 ## Reproducing the numbers
 

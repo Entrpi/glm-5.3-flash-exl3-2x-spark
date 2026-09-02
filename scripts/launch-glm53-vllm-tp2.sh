@@ -54,6 +54,7 @@ MODEL_PATH="/models/glm53-exl3"
 
 # ---- serving knobs (defaults = the validated production configuration) -----
 IMAGE="${IMAGE:-ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v2.3-tier1}"
+KIT_VERSION="${KIT_VERSION:-v2.3-tier1}"   # release this launcher shipped with (install.sh stamps it from VERSION)
 NAME="${NAME:-vllm_glm53}"
 MAX_LEN="${MAX_LEN:-524288}"             # 500k default bank (2026-08-29);
                                          # 131072 was the pre-long-context
@@ -247,8 +248,8 @@ SPEC_ARGS=()
 if [[ "$MTP" != "0" ]]; then
   SPEC_ARGS=(--speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":$MTP}")
 elif [[ "$SPEC" == "dflash" ]]; then
-  test -f "$DFLASH_DIR/config.json" || {
-    echo "DFlash2 draft weights not found at $DFLASH_DIR (run install.sh, or SPEC=none)" >&2
+  { test -f "$DFLASH_DIR/config.json" && test -f "$DFLASH_DIR/model.safetensors"; } || {
+    echo "DFlash2 draft weights not found or incomplete at $DFLASH_DIR (run install.sh, or SPEC=none)" >&2
     exit 2
   }
   EXTRA_VOLS+=(-v "$DFLASH_DIR:/models/glm53-dflash2:ro")
@@ -465,3 +466,41 @@ docker run --gpus all -d \
     $HEADLESS
 
 echo "launched $NAME rank=$NODE_RANK host=$HOST_IP gid=$NCCL_GID_INDEX image=$IMAGE weights=$WEIGHTS_MODE kv=${KV_CACHE_MEMORY:-auto}${KV_DTYPE:+/$KV_DTYPE}${ATTN_BACKEND:+ attn=$ATTN_BACKEND} spec=${SPEC}${MTP:+ mtp=$MTP} mnbt=${MNBT:-default}${KDA_PREFILL:+ kda=$KDA_PREFILL}"
+
+# Once-daily kit update check (head only): a plain GET of the one-line LATEST
+# file in the kit repository, 3 s timeout, nothing sent about this machine,
+# never affects the launch. Disable with GLM53_NO_UPDATE_CHECK=1 (.env or
+# environment); GLM53_UPDATE_URL overrides the source (tests use file://).
+kit_version_key() { # "v2.3-tier1" -> "2 3 0" (numeric prefix; suffix ignored)
+  local v="${1#v}"; v="${v%%-*}"
+  local a="${v%%.*}" rest="${v#*.}" b c
+  [[ "$rest" == "$v" ]] && rest=0
+  b="${rest%%.*}"; c="${rest#*.}"; [[ "$c" == "$rest" ]] && c=0
+  printf '%d %d %d' "${a:-0}" "${b:-0}" "${c:-0}" 2>/dev/null || printf '0 0 0'
+}
+kit_version_newer() { # kit_version_newer <remote> <local>
+  local r l; r=$(kit_version_key "$1"); l=$(kit_version_key "$2")
+  [[ "$r" == "0 0 0" ]] && return 1
+  local ra rb rc la lb lc; read -r ra rb rc <<<"$r"; read -r la lb lc <<<"$l"
+  (( ra != la )) && (( ra > la )) && return 0
+  (( ra == la && rb != lb )) && (( rb > lb )) && return 0
+  (( ra == la && rb == lb && rc > lc )) && return 0
+  return 1
+}
+kit_update_check() {
+  [[ "${GLM53_NO_UPDATE_CHECK:-0}" == "0" ]] || return 0
+  [[ "$NODE_RANK" == "0" ]] || return 0
+  local stamp="$HOME/.cache/glm53-kit/update-check" latest
+  local url="${GLM53_UPDATE_URL:-https://raw.githubusercontent.com/Entrpi/glm-5.3-flash-exl3-2x-spark/main/LATEST}"
+  mkdir -p "${stamp%/*}" 2>/dev/null || return 0
+  if [[ -f "$stamp" ]] && (( $(date +%s) - $(stat -c %Y "$stamp" 2>/dev/null || echo 0) < 86400 )); then return 0; fi
+  : > "$stamp"
+  latest=$(curl -fsS --max-time 3 "$url" 2>/dev/null | head -1 | tr -d '\r') || return 0
+  [[ -n "$latest" ]] || return 0
+  if kit_version_newer "$latest" "$KIT_VERSION"; then
+    echo "kit update available: $latest (installed: $KIT_VERSION). Upgrade: git pull in the kit checkout, then ./install.sh"
+    echo "  (this once-daily check reads one line from the kit repository and sends nothing; disable with GLM53_NO_UPDATE_CHECK=1)"
+  fi
+  return 0
+}
+kit_update_check
