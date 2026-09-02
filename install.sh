@@ -425,6 +425,12 @@ list_old_images() { # list_old_images <runner...>
   local repo="${IMAGE%%:*}"
   "$@" "docker images --format '{{.Repository}}:{{.Tag}} {{.Size}}' | grep '^$repo:' | grep -v '^$IMAGE ' | grep -v ':latest '" 2>/dev/null
 }
+# Directories written by earlier installers' downloads (or the serving
+# container) contain root-owned files; a plain rm fails without sudo, so fall
+# back to emptying them from a throwaway root container.
+rm_dir_any_owner() { # rm_dir_any_owner <runner...>   (removes $OLD_DRAFTER_DIR)
+  "$@" "[ -d '$OLD_DRAFTER_DIR' ] || exit 0; rm -rf -- '$OLD_DRAFTER_DIR' 2>/dev/null && exit 0; docker run --rm -v '$OLD_DRAFTER_DIR:/rm' --entrypoint sh '$IMAGE' -c 'rm -rf /rm/* /rm/.[!.]* 2>/dev/null; true' >/dev/null 2>&1; rmdir -- '$OLD_DRAFTER_DIR'"
+}
 offer_cleanup() {
   local head_imgs worker_imgs dfl="" n=0 what=""
   head_imgs=$(list_old_images bash -c); worker_imgs=$(list_old_images WSSH)
@@ -454,7 +460,7 @@ offer_cleanup() {
     [ -n "$worker_imgs" ] && { WSSH "$cmd" 2>&1 | sed 's/^/  worker: /' || true; }
   fi
   if [ "$do_dfl" = 1 ] && [ -n "$dfl" ]; then
-    rm -rf -- "$OLD_DRAFTER_DIR"; WSSH "rm -rf -- '$OLD_DRAFTER_DIR'"
+    rm_dir_any_owner bash -c; rm_dir_any_owner WSSH
   fi
   ok "leftovers removed"
 }
@@ -465,7 +471,9 @@ dl_in_container() { # dl_in_container <runner...> -- <hf_repo> <host_dir> [revis
   local repo=$1 dir=$2 rev=${3:-}
   local revarg=""
   [ -n "$rev" ] && revarg=", revision='$rev'"
-  "${run[@]}" "mkdir -p '$dir' && docker run --rm -v '$dir:/dl' -v '$dir/.hf:/root/.cache/huggingface' --entrypoint python3 '$IMAGE' -c \"from huggingface_hub import snapshot_download; snapshot_download('$repo', local_dir='/dl'$revarg)\""
+  # Runs as the invoking user (not root) so the files can be removed later
+  # without a container; the HF cache lives inside the target directory.
+  "${run[@]}" "mkdir -p '$dir/.hf' && docker run --rm --user \$(id -u):\$(id -g) -e HOME=/tmp -e HF_HOME=/dl/.hf -v '$dir:/dl' --entrypoint python3 '$IMAGE' -c \"from huggingface_hub import snapshot_download; snapshot_download('$repo', local_dir='/dl'$revarg)\""
 }
 have_exl3() { # have_exl3 <runner...> -- <dir>
   local run=() ; while [ "$1" != "--" ]; do run+=("$1"); shift; done; shift
