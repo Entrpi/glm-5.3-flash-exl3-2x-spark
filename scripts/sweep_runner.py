@@ -151,6 +151,11 @@ async def run_cell(client, base, model, arm, c, ctx_tokens, duration, cpt,
             return {"arm": arm, "c": c, "status": "prefill-timeout"}
 
     ramp_s = time.monotonic() - t_start
+    # Per-stream time to first token (all c prompts were submitted at once,
+    # so this includes any queueing behind the others) and the aggregate
+    # prefill rate over the ramp, from the calibrated chars-per-token.
+    ttfts = sorted(s.first_tok_t - t_start for s in streams)
+    prompt_tokens_est = sum(len(t) / cpt for t in texts)
     m0 = await scrape_metrics(client, base)
     counts0 = [s.usage_tokens or s.tokens for s in streams]
     w0 = time.monotonic()
@@ -188,6 +193,11 @@ async def run_cell(client, base, model, arm, c, ctx_tokens, duration, cpt,
     return {
         "arm": arm, "c": c, "status": "ok", "window_s": round(window, 1),
         "ramp_s": round(ramp_s, 1),
+        "ttft_min_s": round(ttfts[0], 2),
+        "ttft_med_s": round(ttfts[len(ttfts) // 2], 2),
+        "ttft_max_s": round(ttfts[-1], 2),
+        "prompt_tokens_est": int(prompt_tokens_est),
+        "prefill_tok_s": round(prompt_tokens_est / ramp_s, 1),
         "agg_tok_s": round(agg, 2),
         "per_stream_min": round(min(per_stream), 2),
         "per_stream_med": round(sorted(per_stream)[len(per_stream) // 2], 2),

@@ -660,6 +660,81 @@ alternating 2× chunk slowdowns per rank); GPU clocks stayed at 2,424
 MHz with no throttle flags. If a deployment adds anything to the head,
 take the KV budget down a notch (13.4 GB) first.
 
+## 19. v2.3: the drafter's step, measured to the wall (2026-09-02)
+
+Three source changes behind the §18 receipts, validated as overlays on
+the 8-channel launcher with the same-content acceptance arm (16k unique
+contexts, 60 s windows) and then baked as `v2.3-tier1`:
+
+**Per-M dispatch for the b12x MXFP8 GEMM** (`VLLM_B12X_MXFP8_MAX_M`,
+default 16). The b12x kernel keeps its packed weight for small row counts
+and a swizzled FlashInfer scale over the same fp8 weight for larger ones;
+rows above the threshold take the FlashInfer CUTLASS path. Arm: one
+stream 8.66 → 9.09 steps/s (115.5 → 110.0 ms/step, +5%) at acceptance
+parity (2.42 → 2.37); four streams 4.68 → 4.68 steps/s with acceptance
+back in the FlashInfer band (2.52 vs 2.59 ± 0.06; the all-M b12x arm sat
+at 2.40 ± 0.06 over three runs). This is what lets the §18 drafter GEMM
+become a default.
+
+**Rowwise-fp8 draft head** (`VLLM_DFLASH_FP8_DRAFT_HEAD=1`). The DFlash2
+candidate top-k projects the full target vocabulary through the shared
+lm_head every step: 634 MB of bf16 per rank, 2.87 ms. A one-time rowwise
+fp8 copy (the DSpark lane's helper, 317 MB) and a dynamic-fp8 GEMM take
+1.5 ms. Draft-time only — the verify pass scores with the bf16 head, so
+accepted outputs are the target's. Acceptance parity at four streams
+(2.58 vs the band); ~-1 ms/step.
+
+**Route-pack fast path** (b12x `route_pack.py`). The trellis MoE decode
+binding always supplies a preallocated `expert_counts`, so the four-launch
+count/prefix/post/sort sequence replaces the single-CTA small-prefix
+kernel (83–168 µs × 42 layers = 3.9 ms of GPU time per step). Routing is
+bit-identical. The wall gain is ~0: the old kernel overlapped the
+shared-expert GEMMs on another stream. Kept because it frees SM time and
+the census now reads honestly — and as a lesson: kernel-sum deltas are
+ceilings; only critical-path kernels convert one to one. Check the arm.
+
+Not in v2.3: b12x's fused top-k-sum TC-decode path (packed-layout only;
+the trellis layout forces the fp16 arm) — Tier 3 kernel work; GPU Direct
+RDMA over RoCE (needs a newer `rdma-core` in the image or `nvidia-peermem`
+on both boxes).
+
+**Reading a decode number on this lane.** After the v2.3 flip the
+forum-convention prose benchmark (`bench_glm53.py`: one 161-token prompt,
+256 forced greedy tokens, three runs) read 25.4 tok/s against 28.5–29.5
+the same morning on v2.2. Chasing it through eleven boots settled the
+method, not the engine: sixteen identical greedy requests on one boot
+produced sixteen different continuations (TP2 + MoE + a verify-row count
+that changes with acceptance are not batch-invariant, so near-ties flip),
+the drafter needed 81–98 steps for the same 256 tokens, and the step time
+held at 110 ms to within 1% across all of them. Prose tok/s from one short
+request is therefore an acceptance draw with a ±10% spread; the morning
+number was its favourable tail. v2.3 vs v2.2 on the invariant metric:
+110 vs 115.5 ms per step at unchanged acceptance. The fixed 8 NCCL
+channels were re-tested against NCCL's own choice on v2.3 with the knobs
+on: 109.9 vs 110.5 ms per step at short context, 9.04 vs 8.86 steps/s at
+16k — a small win, kept (`NCCL_NCHANNELS=0` restores NCCL's choice).
+Judge decode by steps/s and accepted tokens per step from `/metrics`
+(`prose_probe.py` prints both per run), or by the same-content sweep;
+quote single-prompt tok/s only with ≥8 runs and the spread.
+
+**Which drafter file.** The reference pair has served an MXFP8 DFlash2
+since v2 — byte-identical to local-inference-lab's first MXFP8
+publication (repo commit `1256dc43`, quantized from IncoAI's Aug 27
+release `7d74cdd8`) — while every kit release installed IncoAI's bf16
+file at its latest revision. IncoAI has since pushed two "Checkpoint
+update" revisions (`dc77ff1c` Aug 28, `bf582e4e` Aug 31) and the lab
+re-quantized `dc77ff1c` (current file `c033e03d`; all 128 tensors differ
+from the first publication, same converter, same 0.0266 relative RMSE).
+One boot each on v2.3 defaults, same-content arm at four streams:
+accepted per step 2.48 (lab MXFP8, `dc77`), 2.53 (bf16 `bf582e4e`), 2.47
+(first publication); eight-run prose probe medians 1.74 / 1.79 / 1.82
+with fully overlapping spreads; step time ~110 ms for both MXFP8 files
+vs 113–115 ms for bf16 (bf16 drafter GEMMs, and the b12x path is
+MXFP8-only). Parity, so the kit now installs the lab's MXFP8 copy by
+default (`DFLASH_REPO=local-inference-lab/GLM-5.3-Flash-DFlash2-MXFP8`,
+1.3 GiB, same CC BY-NC-ND licence); the bf16 original stays one env line
+away. The pair runs the same file.
+
 ## Production recommendation
 
 Serve the GLM_NEXT lane (ratified default 2026-08-30):
@@ -667,9 +742,12 @@ Serve the GLM_NEXT lane (ratified default 2026-08-30):
 KV_SKIP_LAYERS=sliding_window`, 524k context, DFlash2 k=7, CUDA graphs,
 MNBT 8192, KV budget 14.4 GB (v2.2; 12.4 GB on v2.1 and older), prefix
 unit 512, gmu 0.85, `SKIP_MM_PROFILING=1`, thinking off at the serving
-layer. The `v2.2-ring` image bakes the whole lane (fork @ `fdf56c9be` +
-b12x `glm-next-backport`); `v2-glmnext` first baked it, and the older
-`v1-dflash2` required hotfix overlays. For interactive or agentic
+layer, plus the v2.3 drafter defaults (`NCCL_MIN/MAX_NCHANNELS=8`,
+`VLLM_USE_B12X_FP8_GEMM=1` with the per-M fallback,
+`VLLM_DFLASH_FP8_DRAFT_HEAD=1`; §18–19). The `v2.3-tier1` image bakes the
+whole lane (fork @ `f223ff9f2` + b12x `glm-next-backport` @ `2f53ce3`);
+`v2.2-ring` (fork `fdf56c9be`) is the previous release — on it keep
+`VLLM_USE_B12X_FP8_GEMM=0`. For interactive or agentic
 serving add `MIXED_PREFILL_DECODE_WEIGHT=1.0 MIXED_PREFILL_CAP=512`
 (§17). The fp8_e4m3 lane (no overlay needed) remains fully
 supported: drop the three env knobs. For math-heavy workloads the

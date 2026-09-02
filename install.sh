@@ -11,7 +11,7 @@
 # What this does (every step idempotent — safe to re-run):
 #   1. verify both hosts (arch, GB10, docker+GPU, disk, rail, SSH)
 #   2. pull the serving image on the head; ship to the worker if needed
-#   3. download weights (EXL3 ~176 GiB; DFlash2 drafter ~2.3 GiB) per the
+#   3. download weights (EXL3 ~176 GiB; DFlash2 drafter ~1.3 GiB) per the
 #      chosen topology (local-both default, --nfs alternative)
 #   4. install the launch/warmup scripts + per-box serve config
 #   5. launch worker then head, wait for health, warm JIT shapes, smoke test
@@ -27,6 +27,7 @@
 # This recipe is a community derivative. It layers on top of:
 #   zai-org/GLM-5.3-Flash (model) - brandonmusic EXL3/TR3 4bpw (quant)
 #   incoai GLM-5.3-Flash-DFlash2 (drafter, CC BY-NC-ND, fetched from source)
+#   local-inference-lab GLM-5.3-Flash-DFlash2-MXFP8 (the drafter's 8-bit copy, default)
 #   vLLM + local-inference-lab fork lineage - eugr's spark-vllm-docker build
 #   turboderp exllamav3 - tpurtell sparkinfer-glmrt (b12x) - FlashInfer
 set -u
@@ -48,11 +49,19 @@ WORKER_NCCL_HCA="${WORKER_NCCL_HCA:-rocep1s0f0}"
 NCCL_SUBNET="${NCCL_SUBNET:-10.200.0.0/24}"
 WEIGHTS_MODE="${WEIGHTS_MODE:-}"
 MODEL_HOST_PATH="${MODEL_HOST_PATH:-$HOME/models/glm53-exl3}"
-DFLASH_DIR="${DFLASH_DIR:-$HOME/models/glm53-dflash2}"
+DFLASH_DIR="${DFLASH_DIR:-$HOME/models/glm53-dflash2-mxfp8}"
 EXL3_REPO="${EXL3_REPO:-brandonmusic/GLM-5.3-Flash-tr3-4bpw}"
 EXL3_REPO_FALLBACK="${EXL3_REPO_FALLBACK:-Mia-AiLab/GLM-5.3-Flash-EXL3-TR3-4bpw}"
-DFLASH_REPO="${DFLASH_REPO:-incoai/GLM-5.3-Flash-DFlash2}"
-IMAGE="${IMAGE:-ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v2.2-ring}"
+DFLASH_REPO="${DFLASH_REPO:-local-inference-lab/GLM-5.3-Flash-DFlash2-MXFP8}"
+# Revision of the drafter repo to fetch. The default pins the validated commit
+# of the default repo; any other DFLASH_REPO fetches its latest revision.
+if [ -z "${DFLASH_REVISION+x}" ]; then
+  case "$DFLASH_REPO" in
+    local-inference-lab/GLM-5.3-Flash-DFlash2-MXFP8) DFLASH_REVISION=62f758c0a0e19b9cb76fc098c911b8ed76daff5b ;;
+    *) DFLASH_REVISION="" ;;
+  esac
+fi
+IMAGE="${IMAGE:-ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v2.3-tier1}"
 NFS_PORT="${NFS_PORT:-12049}"
 # --nfs mode export server image. Default: the kit's own minimal NFSv4-only
 # image (nfs/Dockerfile), built natively ON the worker at install time —
@@ -69,13 +78,16 @@ PORT="${PORT:-8000}"
 SERVE_KNOBS=(MPORT MAX_LEN SPEC MTP DFLASH_TOKENS EAGER SKIP_MM_PROFILING
   BLOCK_SIZE KV_DTYPE KV_CACHE_MEMORY KV_SKIP_LAYERS ATTN_BACKEND MNBT GMU
   MAX_SEQS MM_CACHE_GB LOAD_FORMAT CACHE_HOST_PATH VLLM_EXL3_STANDARD_FUSED
-  VLLM_NVFP4_MLA_DYNAMIC_SCALE VLLM_DISABLED_KERNELS GLM53_TOPK_FIX_SO)
+  VLLM_NVFP4_MLA_DYNAMIC_SCALE VLLM_DISABLED_KERNELS GLM53_TOPK_FIX_SO
+  MIXED_PREFILL_DECODE_WEIGHT MIXED_PREFILL_CAP
+  VLLM_USE_B12X_FP8_GEMM VLLM_B12X_MXFP8_MAX_M VLLM_DFLASH_FP8_DRAFT_HEAD NCCL_NCHANNELS
+  MEM_USED_MAX_GB)
 
-SKIP_PULL=0 SKIP_DOWNLOAD=0 NO_START=0 FORCE=0
+SKIP_PULL=0 SKIP_DOWNLOAD=0 NO_START=0 FORCE=0 PRUNE_OLD=0
 usage() {
   cat <<'EOF'
 Usage: ./install.sh [--nfs|--local-both] [--skip-pull] [--skip-download]
-                    [--no-start] [--force] [--help]
+                    [--no-start] [--prune-old-images] [--force] [--help]
 
   --nfs           weights only on the worker, NFS-exported to the head
                   (the reference kit's validated-production topology)
@@ -84,7 +96,10 @@ Usage: ./install.sh [--nfs|--local-both] [--skip-pull] [--skip-download]
   --skip-pull     keep the local image (no GHCR pull)
   --skip-download weights already present on the right boxes
   --no-start      prepare everything but do not launch
-  --force         downgrade hardware-check failures to warnings
+  --prune-old-images  after the pull, remove superseded kit image tags on both boxes
+                  (each release is ~18 GiB; the current tag and non-kit images are kept)
+  --force         downgrade hardware-check and memory-preflight failures to warnings
+                  (MEM_USED_MAX_GB=<gb> in .env changes the 6 GB preflight limit; 0 skips it)
 
 Env-var equivalents live in .env (copied from .env.example on first run).
 EOF
@@ -97,6 +112,7 @@ for arg in "$@"; do
     --skip-download) SKIP_DOWNLOAD=1 ;;
     --no-start) NO_START=1 ;;
     --force) FORCE=1 ;;
+    --prune-old-images) PRUNE_OLD=1 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown flag: $arg"; usage; exit 2 ;;
   esac
@@ -134,6 +150,42 @@ hw_check() { # hw_check <where> <runner...>
     || warn "$where: docker --gpus all probe failed (may be fine if no small image is cached; the real pull comes next)"
 }
 disk_free_g() { df -BG --output=avail "$1" 2>/dev/null | tail -1 | tr -dc 0-9; }
+MEM_USED_MAX_GB="${MEM_USED_MAX_GB:-6}"
+# Hotfix overlay dirs (~/glm53-hotfix, -fi, -b12x) were debugging aids for the
+# v1-dflash2 image; the launcher binds them over whatever image runs, so an
+# old install's overlays would shadow the current image's code. Refuse to
+# upgrade over them (--force downgrades to a warning).
+overlay_check() { # overlay_check <where> <runner...>
+  local where=$1; shift
+  local run=("$@") found
+  found=$("${run[@]}" 'for d in $HOME/glm53-hotfix $HOME/glm53-hotfix-fi $HOME/glm53-hotfix-b12x; do [ -d "$d" ] && echo "$d"; done' 2>/dev/null | tr '\n' ' ')
+  [ -z "$found" ] && return 0
+  warn "$where: hotfix overlay dir(s) present: $found"
+  warn "$where: they would be bound over $IMAGE. Move them aside: for d in $found; do mv \"\$d\" \"\$d.retired-\$(date +%F)\"; done"
+  if [ "$FORCE" = 1 ]; then warn "$where: continuing under --force (overlays stay active)"; else die "$where: remove or move the overlay dirs, then re-run (or --force to keep them)"; fi
+}
+mem_check() { # mem_check <where> <runner...>  — system memory in use before launch
+  local where=$1; shift
+  local run=("$@")
+  [ "$MEM_USED_MAX_GB" = 0 ] && return 0
+  if "${run[@]}" 'test -n "$(docker ps -q -f name=vllm_glm53 2>/dev/null)"'; then
+    log "$where: vllm_glm53 is running — memory preflight deferred to the launcher"
+    return 0
+  fi
+  local used_mb
+  used_mb=$("${run[@]}" "free -m | awk 'NR==2{print \$3}'" 2>/dev/null || echo 0)   # free(1) "used" column
+  if [ "${used_mb:-0}" -gt $((MEM_USED_MAX_GB * 1024)) ]; then
+    warn "$where: $((used_mb/1024)) GB of system memory in use before launch (limit ${MEM_USED_MAX_GB} GB); top consumers:"
+    "${run[@]}" "ps -eo rss,comm --sort=-rss | awk 'NR>1 && NR<=6 {printf \"    %6d MB  %s\n\", \$1/1024, \$2}'" 2>/dev/null
+    if [ "$FORCE" = 1 ]; then
+      warn "$where: continuing under --force; consider a smaller KV_CACHE_MEMORY (~90k pool tokens per GB)"
+    else
+      die "$where: stop the other consumers, set a smaller KV_CACHE_MEMORY in .env, or re-run with MEM_USED_MAX_GB=<gb> (0 skips) / --force"
+    fi
+  else
+    ok "$where: $((used_mb/1024)) GB of system memory in use (limit ${MEM_USED_MAX_GB} GB)"
+  fi
+}
 
 # Swap surgery: 32G swapfile + fstab persistence. Deliberately quote-free so
 # it survives the WSSH "sudo -n bash -c '...'" nesting.
@@ -169,6 +221,15 @@ verify_hosts() {
   free_head=$(disk_free_g "$HOME"); free_worker=$(WSSH "df -BG --output=avail \$HOME | tail -1 | tr -dc 0-9")
   [ "${free_head:-0}" -ge "$need_head" ] || die "head needs ~${need_head}G free in \$HOME (has ${free_head:-?}G)"
   [ "${free_worker:-0}" -ge "$need_worker" ] || die "worker needs ~${need_worker}G free in \$HOME (has ${free_worker:-?}G)"
+  # Memory preflight (same rule as the launcher): the validated defaults
+  # assume a lightly loaded headless box with < MEM_USED_MAX_GB (6) of
+  # system memory in use before launch. A box already running vllm_glm53 is
+  # skipped here (the launcher re-checks after removing it). --force
+  # downgrades a failure to a warning; MEM_USED_MAX_GB=0 skips the check.
+  mem_check head bash -c
+  mem_check worker WSSH
+  overlay_check head bash -c
+  overlay_check worker WSSH
   # Swap prerequisite (measured 2026-08-31): weight load consumes ALL
   # available swap on the head in BOTH weights modes (reference pair: full
   # 32 GiB used, 0.8 GiB MemFree floor; even the worker pegs its 16 GiB).
@@ -247,12 +308,24 @@ pull_image() {
   ok "image on both boxes: $IMAGE"
 }
 
+
+prune_old_images() { # remove superseded ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark tags on both boxes
+  [ "$PRUNE_OLD" = 1 ] || return 0
+  local repo="${IMAGE%%:*}" cur="$IMAGE"
+  local cmd="docker images --format '{{.Repository}}:{{.Tag}}' | grep '^$repo:' | grep -vx '$cur' | grep -v ':latest\$' | xargs -r docker rmi"
+  log "pruning superseded kit images (keeping $cur)"
+  bash -c "$cmd" 2>&1 | sed 's/^/  head: /' || true
+  WSSH "$cmd" 2>&1 | sed 's/^/  worker: /' || true
+  ok "old kit images pruned"
+}
 # ---------- §3 weights -------------------------------------------------------
-dl_in_container() { # dl_in_container <runner...> -- <hf_repo> <host_dir>
+dl_in_container() { # dl_in_container <runner...> -- <hf_repo> <host_dir> [revision]
   local run=() a
   while [ "$1" != "--" ]; do run+=("$1"); shift; done; shift
-  local repo=$1 dir=$2
-  "${run[@]}" "mkdir -p '$dir' && docker run --rm -v '$dir:/dl' -v '$dir/.hf:/root/.cache/huggingface' --entrypoint python3 '$IMAGE' -c \"from huggingface_hub import snapshot_download; snapshot_download('$repo', local_dir='/dl')\""
+  local repo=$1 dir=$2 rev=${3:-}
+  local revarg=""
+  [ -n "$rev" ] && revarg=", revision='$rev'"
+  "${run[@]}" "mkdir -p '$dir' && docker run --rm -v '$dir:/dl' -v '$dir/.hf:/root/.cache/huggingface' --entrypoint python3 '$IMAGE' -c \"from huggingface_hub import snapshot_download; snapshot_download('$repo', local_dir='/dl'$revarg)\""
 }
 have_exl3() { # have_exl3 <runner...> -- <dir>
   local run=() ; while [ "$1" != "--" ]; do run+=("$1"); shift; done; shift
@@ -266,8 +339,8 @@ download_models() {
   log "It is downloaded from its source repository and never redistributed."
   echo
   # drafter: needed on BOTH boxes (each TP rank loads it)
-  WSSH "test -f '$DFLASH_DIR/config.json'" || dl_in_container WSSH -- "$DFLASH_REPO" "$DFLASH_DIR"
-  test -f "$DFLASH_DIR/config.json" || dl_in_container bash -c -- "$DFLASH_REPO" "$DFLASH_DIR"
+  WSSH "test -f '$DFLASH_DIR/config.json'" || dl_in_container WSSH -- "$DFLASH_REPO" "$DFLASH_DIR" "$DFLASH_REVISION"
+  test -f "$DFLASH_DIR/config.json" || dl_in_container bash -c -- "$DFLASH_REPO" "$DFLASH_DIR" "$DFLASH_REVISION"
 
   # EXL3 weights per topology
   if [ "$WEIGHTS_MODE" = local ]; then
@@ -390,11 +463,23 @@ start_server() {
   smoke=$(curl -s -m 90 "http://localhost:$PORT/v1/chat/completions" -H 'Content-Type: application/json' \
     -d '{"model":"glm-5.3-flash","messages":[{"role":"user","content":"What is 17 * 23? Reply with just the number."}],"temperature":0,"max_tokens":200}' \
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["choices"][0]["message"]["content"])' 2>/dev/null)
-  case "$smoke" in *391*) ok "smoke test passed: '$smoke'" ;; *) die "smoke test failed (got: '$smoke')" ;; esac
+  case "$smoke" in
+    *391*) ok "smoke test passed: '$smoke'" ;;
+    *)
+      warn "smoke test failed (got: '$smoke'). Containers are left running so the logs survive:"
+      warn "  head:   docker logs vllm_glm53 2>&1 | grep -E 'Error|Traceback|assert' | tail -20"
+      warn "  worker: ssh $WORKER 'docker logs vllm_glm53 2>&1 | grep -E \"Error|Traceback|assert\" | tail -20'"
+      warn "  image:  $(docker inspect vllm_glm53 --format '{{.Config.Image}}' 2>/dev/null)"
+      docker logs vllm_glm53 2>&1 | grep -E "Error|Traceback|assert|error:" | tail -8 | sed 's/^/    head: /' >&2
+      warn "To tear down both boxes: docker rm -f vllm_glm53; ssh $WORKER docker rm -f vllm_glm53"
+      die "smoke test failed"
+      ;;
+  esac
 }
 
 verify_hosts
 pull_image
+prune_old_images
 download_models
 install_scripts
 start_server

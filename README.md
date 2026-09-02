@@ -1,382 +1,338 @@
-# GLM-5.3-Flash EXL3 + DFlash2 on 2× DGX Spark
+# GLM-5.3-Flash EXL3 on two DGX Sparks
 
-OpenAI-compatible vLLM serving of [zai-org/GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash)
-(320B/A18B) on two NVIDIA GB10 DGX Sparks over a 200GbE rail — 4-bit EXL3
-weights, DFlash2 block-diffusion speculative decode, CUDA graphs, fused
-trellis MoE, vision and tool calling included, quality-gated at every step.
+Run [GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash), a
+320-billion-parameter open model, on a pair of NVIDIA DGX Spark desktops as
+a private, OpenAI-compatible API. One installer and one large download, and
+you have a model of frontier-class scale answering on your own hardware with
+1.3 million tokens of context memory at full quality (1.7 million with the
+compact-memory option), vision, tool calling, and quality at parity with the
+official release.
 
-**Status: community derivative.** This is not an official image of any
-upstream project. Built and maintained by [Entrpi](https://github.com/Entrpi);
-report problems on [this repo's issue tracker](https://github.com/Entrpi/glm-5.3-flash-exl3-2x-spark/issues)
-(please debug against this derivative before assigning a problem upstream).
+**Status: community derivative.** Not an official image of any upstream
+project. Built and maintained by [Entrpi](https://github.com/Entrpi); report
+problems on [this repo's issue tracker](https://github.com/Entrpi/glm-5.3-flash-exl3-2x-spark/issues)
+before assigning them upstream.
 
-**Headline numbers** (temperature 0 unless noted, measured 2026-08-30 on
-the ratified default — 524k context, GLM_NEXT b12x lane with packed fp8
-KV, MXFP8 DFlash2 drafter): **31.2 tok/s** single-stream prose decode,
-**~72–75 tok/s** on high-acceptance structured output, TTFT
-**0.38–0.41 s**, **1,287,194-token KV pool** at the v2.2 default (2.46
-concurrent 524k banks with the spec-state ring at 14.4 GB, and no
-per-request spec-state tax on top; 1,324,163 on v2–v2.1 at 12.4 GB,
-1,858,451 drafterless), 133k-token prefill in **89 s** and a
-**full 499k bank in 6.5 min (1,277 tok/s, needle-exact at that depth)**,
-math_500 **91%** (n=100), gpqa_diamond 70%, estonia 133k retrieval
-**10/10**, lavd ledger audit **15/30 EXACT** (3× the fp8_e4m3 lane),
-vision verified end-to-end including tool calls. Every claim is cashed
-out in a table below. Opt-in profiles go further: **NVFP4 KV** lifts the
-pool to **1,702,584 tokens (3.25 banks)**, and the **native-1M profile
-serves 1,048,576-token context with 2.05 concurrent full banks** —
-needle-exact at 875k depth, decode flat at full depth, ~15 min per cold
-1M prefill (FINDINGS §13). All of this is baked into the shipped
-`v2.2-ring` image. v2.2 moves DFlash2's speculative scratch states off
-the KV pool onto a per-slot ring (the ~25-block-per-request pool tax of
-§15 is gone — DFlash2 now boots at 16 concurrent streams), adds a fair
-mixed-prefill scheduler (decode keeps 85–91% of its fair share while a
-cold prefill runs, with 0.57 s stalls instead of ~3 s), re-ages boundary
-states so sub-prefix reuse degrades gracefully instead of zeroing under
-churn, and right-sizes the sparse indexer's prefill workspace — which
-pays for a **14.4 GB KV default** (pool 1,287,194 tokens at 524k,
-FINDINGS §17). v2.1 added fine-grained prefix reuse on top of
-`v2-glmnext` — warm agentic turns run ~3.9× faster (3.0-3.2 s vs ~12 s
-at 12-17k context, FINDINGS §16). (On the older `v1-dflash2` these
-lanes needed hotfix overlays.) (Numbers published before 2026-08-29 came from an
-earlier measurement era — before the `enable_thinking` template fix
-changed drafting and eval behavior — and are labeled where kept.)
+## What you get
 
-- **Model**: [zai-org/GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) — 320B MoE, 18B active, hybrid KDA + sparse-MLA attention
-- **Quant**: [brandonmusic/GLM-5.3-Flash-tr3-4bpw](https://huggingface.co/brandonmusic/GLM-5.3-Flash-tr3-4bpw) (EXL3/TR3 uniform-K4, ~176 GiB; independent KLD panel puts it at parity with the official FP8 release)
-- **Drafter**: [incoai/GLM-5.3-Flash-DFlash2](https://huggingface.co/incoai/GLM-5.3-Flash-DFlash2) (1B block-diffusion draft, CC BY-NC-ND 4.0 — always downloaded from its source repo, never redistributed here)
-- **Engine**: [Entrpi/vllm-glm-5.3-flash-spark](https://github.com/Entrpi/vllm-glm-5.3-flash-spark) (vLLM fork branch) baked into `ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark` — provenance in [docs/BUILD.md](docs/BUILD.md)
-- **Hardware**: 2× NVIDIA GB10 (DGX Spark, 128 GiB unified each), direct 200GbE QSFP link
+| | |
+|---|---|
+| Model | GLM-5.3-Flash, 320B parameters (18B active per token), served from a 4-bit EXL3 checkpoint independently measured at parity with the official FP8 release |
+| Context memory | 1,287,194 tokens of attention memory at parity quality, shared across whatever is in flight; 1,702,584 with the compact-memory option (small quality step); 2,144,814 in the 1M-request mode. The per-request limit is a flag (`MAX_LEN`, default 524,288: about 2.5 such requests at once, or many shorter ones) |
+| Speed | about 32 tokens/s for a single chat, 70+ tokens/s on structured output (JSON, lists, code), first token in about 0.4 s; a full 500k-token document is read in about 6.5 minutes |
+| Quality | math_500 91%, GPQA-diamond 70%, exact retrieval from a 133k-token document 10/10, all measured on this exact setup |
+| Modalities | text, images, tool calling, optional visible reasoning |
+| API | OpenAI-compatible (`/v1/chat/completions`, `/v1/models`), works with any OpenAI client |
+| Hardware | 2× DGX Spark (GB10, 128 GiB each) joined by their 200GbE ports |
+
+Every number above is measured, not estimated; the tables further down say
+how.
 
 ## Quick start
 
-On the head box (the one that will serve the API), with passwordless SSH to
-the worker:
+You need two DGX Sparks connected directly by their QSFP ports, Docker with
+GPU support on both, and passwordless SSH from the box that will serve the
+API (the *head*) to the other one (the *worker*).
+
+On the head:
 
 ```bash
 git clone https://github.com/Entrpi/glm-5.3-flash-exl3-2x-spark
 cd glm-5.3-flash-exl3-2x-spark
-cp .env.example .env    # set WORKER_LAN_IP + the rail IPs/interfaces
+cp .env.example .env    # set the worker's LAN address and the two rail IPs/interfaces
 ./install.sh
 ```
 
-This command: (1) verifies both hosts, (2) pulls the ~25 GiB serving image
-and ships it to the worker, (3) downloads the ~176 GiB EXL3 weights and the
-~2.3 GiB drafter, (4) installs the launch scripts and per-box config,
-(5) launches worker then head (~13 min to API), warms the JIT shapes, and
-smoke-tests the endpoint. Every step is idempotent — re-run freely.
-
-Variants:
+The installer checks both machines, pulls the ~25 GiB serving image, downloads
+the ~176 GiB model and ~1.3 GiB drafter, installs the launch scripts, starts
+the worker and then the head, warms up, and runs a test request. Every step
+is safe to re-run. Downloads dominate the first run; after that a restart
+takes about four minutes to a live API.
 
 ```bash
-./install.sh --nfs             # weights only on the worker, NFS to the head
-```
-
-```bash
+./install.sh --nfs             # keep the weights only on the worker (head needs ~30 GiB disk)
 ./install.sh --skip-download   # weights already in place
+./install.sh --help            # all options and exactly what the script touches
 ```
+
+Then talk to it:
 
 ```bash
-./install.sh --help            # all flags + what the script touches
+curl -s http://<head-ip>:8000/v1/chat/completions -H 'Content-Type: application/json' -d '{
+  "model": "glm-5.3-flash",
+  "messages": [{"role": "user", "content": "Summarize the attached contract in five bullets."}]
+}'
 ```
 
-## Hardware requirements
+Any OpenAI SDK works with `base_url="http://<head-ip>:8000/v1"` and the model
+name `glm-5.3-flash`.
 
-| | Minimum |
+### Requirements
+
+| | |
 |---|---|
-| Boxes | 2× DGX Spark (GB10, 128 GiB unified memory each) |
-| Interconnect | direct 200GbE QSFP link (RoCE); NCCL runs on this rail |
-| Disk, default (local) mode | ~200 GiB free per box |
-| Disk, `--nfs` mode | ~200 GiB worker, ~30 GiB head |
-| Swap | **≥32 GiB on both boxes** (stock 16 GiB reliably OOMs the head at ~90% of weight load — see the swap note below) |
-| Software | Docker with GPU support on both; passwordless SSH head→worker |
+| Machines | 2× DGX Spark (GB10, 128 GiB unified memory each) |
+| Link | direct 200GbE connection between the two QSFP ports; the two boxes talk over this link only |
+| Disk | ~200 GiB free per box (or ~200 GiB on the worker and ~30 GiB on the head with `--nfs`) |
+| Software | Docker with the NVIDIA runtime on both; passwordless SSH head → worker |
+| Swap | not needed with the default loader; if you switch to the page-cached loader, grow swap to 32 GiB on both boxes first (the installer offers to) |
+| Free memory | under 6 GB of system memory in use on each box before launch (a headless box with no desktop session); the installer and the launcher both check and refuse otherwise, naming the consumers. `MEM_USED_MAX_GB=<gb>` raises the limit, `0` disables the check (`--force` on the installer downgrades it to a warning), and a smaller `KV_CACHE_MEMORY` is the safe way to serve on a busier box |
 
-## Memory and context
+## Using the model
 
-Serving defaults to a **524,288-token context** with fp8 KV (since
-2026-08-29). Measured pools on this stack, at the pinned KV budget of
-their era (12.4 GB through `v2.1-finegrain`; 14.4 GB since `v2.2-ring`,
-see below):
+**Reasoning is off by default** so answers arrive as plain content. Turn it
+on per request and the reasoning comes back in `message.reasoning`, never
+mixed into the answer:
 
-| Configuration | KV pool (tokens) | Concurrency @max-len | Notes |
-|---|---:|---:|---|
-| **Native 1M: `MAX_LEN=1048576`, DFlash2 + `nvfp4_ds_mla` KV** | **2,144,814** | 2.05× | two concurrent full-length native-1M banks (FINDINGS §13); needs the NVFP4 lane (the `persistent_topk` retry fix is baked since `v2-glmnext`; on `v1-dflash2` load `GLM53_TOPK_FIX_SO`); ~15 min per cold 1M prefill, run with `MNBT=4096` |
-| Native 1M, DFlash2 + `fp8_ds_mla` KV | 1,530,144 | 1.46× | the default KV format also serves the full native declaration (topk fix required): one 1M bank plus ~480k spare; cold 1.03M prefill 1,251 tok/s, needle-exact |
-| 524k, DFlash2 + `nvfp4_ds_mla` KV | 1,702,584 | 3.25× | rope-less 304 B/token records with a dynamic per-token scale (`VLLM_NVFP4_MLA_DYNAMIC_SCALE=1`, no calibration file); quality between the two fp8 lanes (math 88, lavd 10 EXACT) |
-| **v2.2 default: 524k, DFlash2 + `fp8_ds_mla` KV, 14.4 GB pin, spec-state ring** | **1,287,194** | 2.46× | **the baked default since `v2.2-ring`**: the ring takes DFlash2's per-request spec-state tax out of the pool (a fixed carve — 4 slots × 7 states × 34 layers, ≈2.5 GiB with the draft ring at `MAX_SEQS=4` — is charged inside the budget instead) and the right-sized indexer workspace funds the +2 GB pin (FINDINGS §17) |
-| GLM_NEXT lane: 524k, DFlash2 + `fp8_ds_mla` KV, 12.4 GB pin | 1,324,163 | 2.53× | the baked default from `v2-glmnext` through `v2.1-finegrain` (ratified 2026-08-30; b12x 528 B/token packed records). Drafterless pool: 1,858,451 (the deficit vs the row below is entirely the draft ring-KV running bf16 under the skip mechanism) |
-| 524k, DFlash2 + `fp8_e4m3` KV | 1,435,070 | 2.74× | the 2026-08-29 default (`KV_DTYPE=fp8_e4m3 ATTN_BACKEND= KV_SKIP_LAYERS=`); vLLM auto-bumps the KV block to 4608 for KDA/attention page parity |
-| 358k, DFlash2 + fp8 | 1,275,306 | 3.56× | `MAX_LEN=358400` — more concurrency headroom |
-| 131k short-context mode, bf16 KV | 520,470 | 3.97× | `MAX_LEN=131072 KV_DTYPE= ATTN_BACKEND= SKIP_MM_PROFILING=0 MAX_SEQS=6` — the pre-2026-08-29 default; math parity with fp8 (86 vs 87 n=100) |
-| 131k, fp8 (2304 block) | 769,817 | 5.87× | historical option gate |
-| 131k, no speculation, bf16 | 917,504 | 7.00× | `SPEC=none` |
+```json
+{"model": "glm-5.3-flash", "messages": [...], "chat_template_kwargs": {"enable_thinking": true}}
+```
 
-**The fp8 trade, measured:** long-context quality is at parity with bf16
-(estonia 133k-token retrieval 9/10 — community band; lavd ledger-audit
-n=30 statistically identical; 111k needle all-facts-exact), and math_500
-is at parity — a same-day, same-harness n=100 A/B: fp8@524k 87/100,
-bf16@131k 86/100 (the older 94% n=50 figure is from an earlier
-measurement era; the current band is 86–88% at either dtype). bf16
-cannot reach the long banks — its pool is ~0.99× a single 524k request. Estonia prefill: 133,186 tokens at
-~1,400 tok/s through the default 8192-token chunks.
+**Tool calling** follows the OpenAI `tools` / `tool_choice` schema and works
+with reasoning on or off. **Images** go in as standard `image_url` content
+parts. Greedy decoding (`temperature: 0`) is fully supported and is what the
+quality numbers below use.
 
-The KV budget is pinned deliberately (**14.4 GB since v2.2**; 12.4 GB
-through v2.1). Explicit budgets bypass vLLM's memory profiling reserve, and
-GB10 unified memory does not fail gracefully — it swap-wedges. The 12.4 GB
-pin kept a **measured 5.25 GiB minimum free** on the memory-binding box
-under saturation plus a 112k-token prefill. v2.2's vLLM right-sizes the
-sparse indexer's prefill K-gather workspace (2.58 GiB → 66 MiB per rank at
-the production shape — the call-site asymmetry was found by MiaAI-Lab's
-#86), so by net accounting against the weeks-stable production footprint
-14.4 GB leaves ~0.5 GiB *more* headroom than the old pin did (14.9 GB is
-the break-even, documented as the aggressive option). On v2.1 and older
-images keep `KV_CACHE_MEMORY=12400000000`.
+**Long documents.** A 133k-token prompt is processed in about 90 s, a
+500k-token one in about 6.5 minutes. Repeated turns on the same document
+reuse the work already done: a follow-up question on a 15k-token
+conversation answers in about 3 s instead of 12.
 
-> Raising the budget is non-linear: on v2.1, 13.4 GB bought +47k tokens but
-> collapsed the measured floor from 5.25 GiB to 2.26 GiB. Do not raise
-> `KV_CACHE_MEMORY` or `GMU` without re-running the floor methodology
-> ([tools/memlog.sh](tools/memlog.sh)) — floors also degrade 1.5–2 GiB per
-> day of workload, so fresh-boot numbers are optimistic, and on GB10
-> unified memory `MemAvailable` floors are a weak signal for sub-GiB
-> deltas (page-cache noise swamps them) — compare net footprints against a
-> known-stable configuration instead.
+**Capacity.** What limits you is the attention-memory pool, 1,287,194
+tokens at the default quality, shared by everything in flight; the
+per-request maximum (`MAX_LEN`, 524,288 by default) is just a cap on how
+much of it one request may take. The default configuration admits up to
+four requests at once and aggregate throughput rises with concurrency
+(about 47 tokens/s across four chats). For many short concurrent sessions,
+or for 1M-token requests, see the configurations below.
 
-> **Weight load uses direct I/O by default** (`LOAD_FORMAT=instanttensor`,
-> the launcher default since 2026-08-31): it bypasses the page cache, cuts
-> the head's load from ~7 min to **~3.6 min launch→API**, and eliminates
-> the load-time swap consumption entirely (measured peaks 4 GiB head /
-> 2.7 GiB worker, vs pegging all of a 32 GiB swap file with the page-cached
-> loader). Expect a ~10–15 min post-boot settling window with mildly noisy
-> TTFT while load-era pages fault back in. Recipe by @Marker689 (#2),
-> verified on the reference pair and three community pairs.
->
-> If you opt back into the page-cached loader (`LOAD_FORMAT=` empty), swap
-> becomes load-bearing and **stock 16 GiB is not enough**: the head peaks
-> at its full 32 GiB of swap with a 0.8 GiB MemFree floor in both local and
-> `--nfs` modes, and dies deterministically at ~88–95% of shard load with
-> less (`NV_ERR_NO_MEMORY` / oom-kill — reported independently on three
-> pairs). Grow swap on **both** boxes first
-> (`sudo fallocate -l 32G /swap-glm53 && sudo chmod 600 /swap-glm53 &&
-> sudo mkswap /swap-glm53 && sudo swapon /swap-glm53`, persist via
-> `/etc/fstab` — `install.sh` checks and offers this).
+## Choosing a configuration
 
-### Startup time
+The defaults are the validated production setup. Everything else is an
+environment variable set in `.env` (or on the launch command line) on both
+boxes. Pick by what you serve:
 
-Worker joins in ~25 s; the head takes **~3.6 min** to API-up with the
-default direct-I/O loader (measured ~225 s on the reference pair, local
-weights) — weight load + engine init + CUDA-graph capture, including the
-drafter's own full graphs. The page-cached loader (`LOAD_FORMAT=` empty)
-takes ~7 min local / ~12–13 min `--nfs`. `install.sh` then runs a ~20 s
-JIT shape warmup so the first real request doesn't pay ~7 s of lazy
-compilation. JIT caches persist across relaunches
-(`~/glm53-vllm-cache/jit`).
+| You mostly want | Set | You get | You give up |
+|---|---|---|---|
+| **Long documents, a few users** (default) | nothing | 1,287,194-token pool at full quality; requests up to 524k (2.5 of those at once, or more shorter ones); the fastest single-stream decode | — |
+| **Snappy chat while others upload documents** | `MIXED_PREFILL_DECODE_WEIGHT=1.0 MIXED_PREFILL_CAP=512` | a running chat keeps 85–91% of its speed while a cold 100k-token upload is processed, with pauses of ~0.6 s instead of ~3 s | document processing slows by 20–35% while chats are active; no cost when idle |
+| **More context memory** | `KV_DTYPE=nvfp4_ds_mla VLLM_NVFP4_MLA_DYNAMIC_SCALE=1` | 1,702,584-token pool (+32%): 3.25 requests at 524k | a small quality step (math 88 vs 91) |
+| **1M-token requests** | the row above plus `MAX_LEN=1048576 MNBT=4096` | 2,144,814-token pool; requests up to 1,048,576 tokens, two of them at once; exact retrieval verified at 875k depth | ~15 minutes to read a full 1M-token prompt |
+| **Many concurrent short sessions** (agents, batch jobs) | `MAX_LEN=131072 MAX_SEQS=12 MNBT=4096 SPEC=none MIXED_PREFILL_DECODE_WEIGHT=1.0 MIXED_PREFILL_CAP=512` | 12–16 streams at 88–103 tokens/s aggregate; without the drafter the pool grows to 1,858,451 tokens at the same budget (+44%) and its 1.3 GB of weights stay unloaded | per-stream speed; requests capped at 131k |
+| **Unquantized attention memory** | `MAX_LEN=131072 KV_DTYPE= ATTN_BACKEND= SKIP_MM_PROFILING=0 MAX_SEQS=6` | 520,470-token pool with no 8-bit attention memory; requests up to 131k | the long banks; quality is the same within noise |
+| **Fallback if the speculative drafter misbehaves** | `MTP=4` | the model's built-in multi-token head; the 1.3 GB drafter and its draft attention memory are not loaded, so the pool grows toward the no-speculation figure above (MTP-4's exact pool is not re-measured on this release) | about 20% slower decode |
 
-## Profiles
+Knobs used above: `MAX_LEN` is the longest request accepted; `MAX_SEQS`
+how many requests run at once; `MNBT` how many prompt tokens are processed
+per step while reading a document (smaller keeps chats smoother, larger
+reads faster); `SPEC=none` turns the speculative drafter off; `KV_DTYPE`
+picks the attention-memory format; the two `MIXED_PREFILL_*` knobs control
+how document reading and live chats share the GPU.
 
-| Profile | How | When |
-|---|---|---|
-| **NVFP4 KV** | GLM_NEXT lane knobs + `KV_DTYPE=nvfp4_ds_mla VLLM_NVFP4_MLA_DYNAMIC_SCALE=1` | +28.6% pool (3.25 × 524k banks) at a small quality cost vs `fp8_ds_mla` (FINDINGS §13); dynamic per-token scales, no calibration file |
-| **Native 1M** | NVFP4 knobs + `MAX_LEN=1048576 MNBT=4096` (on `v1-dflash2` also `GLM53_TOPK_FIX_SO=/cache/topk_fix.so`; baked since `v2-glmnext`) | 2.05 concurrent 1M banks; needle-exact at 875k depth, decode flat at full depth; ~15 min cold 1M prefill (FINDINGS §13) |
-| **Shipped-image default (GLM_NEXT b12x lane)** | (nothing) | 524k context, DFlash2 k=7 + `fp8_ds_mla` packed KV + `B12X_MLA_SPARSE` + CUDA graphs + fine-grained prefix reuse (`--prefix-match-unit 512` since `v2.2-ring`, 2304 in v2.1: warm agentic turns ~3.9×, FINDINGS §16–17; `PREFIX_MATCH_UNIT=` restores coarse) + the spec-state ring (v2.2, §17) — lane ratified 2026-08-30, beats the fp8_e4m3 lane on every quality and speed gate (FINDINGS §12). On the older `v1-dflash2` image the lane needs the hotfix overlays |
-| fp8_e4m3 lane | `KV_DTYPE=fp8_e4m3 ATTN_BACKEND= KV_SKIP_LAYERS=` on both launches | the 2026-08-29 default — 2.74 concurrent full banks; also the profile fully baked into `v1-dflash2` |
-| Short-context bf16 | `MAX_LEN=131072 KV_DTYPE= ATTN_BACKEND= SKIP_MM_PROFILING=0 MAX_SEQS=6` on both launches | the pre-2026-08-29 production config; 131k context |
-| MTP fallback | `MTP=4` on both launches | if the drafter ever misbehaves; ~21% slower |
-| No speculation | `SPEC=none` | maximum KV pool, debugging — but NOT at 524k declared: with ≤4 decode rows the `persistent_topk` small-batch heuristic oversubscribes sm121 (FINDINGS §12); cap `MAX_LEN` ≤ ~358k for drafterless runs |
-| **Agentic / high concurrency** | `MAX_LEN=131072`–`262144 MAX_SEQS=12`–`16 MNBT=4096 SPEC=none MIXED_PREFILL_DECODE_WEIGHT=1.0 MIXED_PREFILL_CAP=512` | many concurrent mid-length streams; the knee is above c=16 (FINDINGS §15). Since v2.2 DFlash2 boots at 16 streams (the ring removed its pool tax) but drafterless still decodes faster from c≥8 (70.8/87.8/103.0 vs 58.1/72.5/69.3 tok/s at c8/12/16, §17) — keep `SPEC=none`, or `MTP=4` at the smaller end. Budget the pin: the ring's fixed costs scale with `MAX_SEQS` (16 streams at 131k need `KV_CACHE_MEMORY>=16500000000`; sixteen 16k contexts took 18e9); a `_check_enough_kv_cache_memory` error at boot is the tell |
-| Interactive decode floor | `MIXED_PREFILL_DECODE_WEIGHT=1.0 MIXED_PREFILL_CAP=512` on top of any profile | decode keeps 85–91% of its fair (processor-sharing) share while cold prefills run, with 0.57 s stalls instead of ~3 s; prefill gets 63–82% of its share; zero cost when uncontended (§17). `MIXED_PREFILL_CAP=-1` alone is the v2 legacy skip mode (39% of solo decode, 3 s stalls, §15). Off by default |
+The memory budget for context (`KV_CACHE_MEMORY`, 14.4 GB) and the GPU
+memory fraction (`GMU`, 0.85) were validated for stability across the
+configurations above on lightly loaded headless Sparks that had under 6 GB
+of system memory in use before the server started; the head then serves
+with about 1–3 GB to spare. DGX Spark unified memory does not fail
+gracefully when oversubscribed, so a box with more resident services, a
+desktop session, or a different firmware state may need a smaller budget:
+lower `KV_CACHE_MEMORY` (each 1 GB is about 90k pool tokens) and check
+headroom with [tools/memlog.sh](tools/memlog.sh) before raising anything.
 
-Thinking is **off by default** at the serving layer
-(`--default-chat-template-kwargs '{"enable_thinking": false}'`); enable per
-request with `"chat_template_kwargs": {"enable_thinking": true}` — reasoning
-then arrives in `message.reasoning`, never mixed into `content`. Tool
-calling (`glm47` parser) and vision (image inputs) work in both modes.
+## Operating it
 
-## Benchmarks
+| Task | How |
+|---|---|
+| Health | `curl -s http://<head-ip>:8000/health` → 200 |
+| Logs | `docker logs -f vllm_glm53` on either box |
+| Restart | on the head `docker rm -f vllm_glm53`, then on the worker `~/launch-glm53-vllm-tp2.sh 1`, then on the head `~/launch-glm53-vllm-tp2.sh 0` (always head down first, worker up first; ~4 min to a live API) |
+| Warm-up | `~/glm53-warmup.sh` after a restart compiles the hot shapes so the first real request does not pay ~7 s |
+| Update | `./install.sh` again pulls the current image; to pin a specific one, set `IMAGE=ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:<tag>` on both launches |
+| Roll back | `IMAGE=ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v2.2-ring VLLM_USE_B12X_FP8_GEMM=0 VLLM_DFLASH_FP8_DRAFT_HEAD=0` on both launches |
+| Per-box config | `~/.glm53-serve.env` (written from `.env` on every install run, so keep your changes in `.env`); command-line variables always win |
+| Upgrade from an earlier release | `git pull`; in `.env` remove any `IMAGE=` line and any `GLM53_TOPK_FIX_SO`; move aside any `~/glm53-hotfix*` directories on both boxes (the installer stops if they exist); then `./install.sh --skip-download`, optionally with `--prune-old-images` to reclaim ~18 GiB per superseded release on each box. Pins to older images are refused with the fix printed |
+| Verify an image | `bash scripts/check_image.sh` (self-containment) and `bash scripts/run_tests.sh` (87 unit tests inside the image; run while the GPUs are free) |
 
-### DFlash2 vs the native MTP head (this stack, single variable)
+## Measured performance
 
-| Config | c1 prose tok/s | c5 aggregate | TTFT | math_500 n=50 |
-|---|---:|---:|---:|---:|
-| EXL3 fused + graphs, MTP-4 | 28.6 | 91.7 | 0.422 s | 90% |
-| **EXL3 fused + graphs, DFlash2 k=7** | **33.1–34.7** | 83.7–96.0 | 0.50 s | **94%** |
+Single request, greedy decoding, on the default configuration. Each figure
+is the median of five 400-token runs; the range shows the run-to-run spread
+(the drafter accepts more or fewer tokens depending on the exact wording the
+model chooses, so two runs of the same prompt differ by a few percent):
 
-> Earlier-era single-variable comparison (both arms measured under the same
-> conditions, so the **+21% relative win stands**; absolute numbers predate
-> the template fix). Current-era absolutes on the shipping default: c1
-> prose 28.9, structured 74.6, TTFT 0.44–0.49 s.
-
-DFlash2 accepts 3.9–5.5 of 8 positions on mixed work versus MTP-4's 3.8 of
-5 — the deeper block wins ~21% single-stream. MTP-5 was also tested and
-regresses (prose acceptance collapses at position 5); MTP-4 remains the best
-fallback. Ranges are boot-to-boot variance across three validated boots.
-
-### Acceptance by workload (DFlash2, k=7, accept length of 8 possible; earlier-era battery — relative ordering stands, current-era prose accept is ~2.3/7 + bonus)
-
-| Workload | Accept | e2e tok/s |
+| Workload | Tokens/s | Run-to-run range |
 |---|---:|---:|
-| Prose / Q&A | 3.5–3.6 | 30.5 |
-| Code | 4.1 | 34.9 |
-| JSON | 4.7 | 40.3 |
-| Math | 5.8 (6.8–7.1 @ temp 1) | 37.7 |
-| Long-context code | 5.2 | 43.8 |
-| Doc-grounded QA / multi-turn | 5.3–7.0 | — |
-| Structured counting | 7.8 (0.98/pos) | 72.4 |
+| Prose, Q&A | 30 | 29–32 |
+| Code | 42 | 41–43 |
+| JSON | 51 | 50–52 |
+| Math | 45 | 41–50 |
+| Structured output (lists, counting) | 71 | 70–72 |
+| First token (short prompt) | 0.3–0.4 s | |
+| Reading a document | 1,490 tokens/s at 133k; 1,277 tokens/s over a full 499k bank | |
 
-Acceptance — not kernel speed — is the whole game: the engine steps at
-~115 ms regardless, so tok/s ≈ (1 + accepted) × step rate. Prose ~3.5/8 is
-the drafter's intrinsic floor; temperature and thinking mode are **not**
-acceptance levers (measured: a 2×2 A/B moved the mean by <0.2).
+Speed depends on how predictable the text is: the model runs a small
+drafter that proposes up to seven tokens per step and keeps the ones the
+full model agrees with, so repetitive or structured output runs two to
+three times faster than free prose. Temperature and reasoning mode do not
+change this.
 
-### Cross-stack: the MiaAI-Lab recipe, on its own benchmark
+Several requests at once, each with its own 16k-token prompt, all submitted
+at the same moment (low-predictability synthetic text, so per-request decode
+sits below the prose figure above). Time to first token here includes
+waiting for the other prompts to be read; a short prompt on an idle server
+answers in about 0.4 s. Measured on this release with `MAX_SEQS=10` so all
+ten could be admitted:
+
+| Concurrent requests | Decode, aggregate tokens/s | Decode per request | Time to first token, median / last | Prompt reading, aggregate tokens/s |
+|---:|---:|---:|---:|---:|
+| 1 | 21.6 | 21.6 | 9.9 s / 9.9 s | 1,598 |
+| 5 | 60.7 | 10.2 | 38.7 s / 53.2 s | 1,494 |
+| 10 | 77.0 | 7.6 | 65.1 s / 101.2 s | 1,575 |
+
+The agentic configuration (no drafter, 12–16 streams) reaches 88–103
+tokens/s aggregate at 8k-token contexts.
+
+Context capacity by configuration (tokens of attention memory available,
+and how many maximum-length requests fit at once):
+
+| Configuration | Pool (tokens) | Full-length requests at once |
+|---|---:|---:|
+| Default (524k) | 1,287,194 | 2.46 |
+| NVFP4 attention memory (524k) | 1,702,584 | 3.25 |
+| Native 1M | 2,144,814 | 2.05 |
+| 131k, unquantized attention memory | 520,470 | 3.97 |
+
+## Measured quality
+
+Greedy decoding, local harness with robust answer extraction, on the default
+configuration:
+
+| Test | Result |
+|---|---|
+| math_500 (n=100) | 91% |
+| GPQA-diamond (n=50) | 70% |
+| Retrieval from a 133,186-token document (n=10) | 10/10 |
+| Ledger audit over a long document (n=30, exact / near / fail) | 15 / 14 / 1 |
+| Speculative decoding equivalence | lossless up to argmax ties ([tools/dflash_equiv.py](tools/dflash_equiv.py)) |
+| Tool calls and image inputs | verified end to end |
+
+An independent KL-divergence panel puts the 4-bit weights at parity with
+the official FP8 release; the math and retrieval gates above are at parity
+with an unquantized-attention-memory run of the same model on this
+hardware.
+
+## How it compares
 
 [MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks](https://github.com/MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks)
-serves the same checkpoint + drafter on the same hardware class via a
-different stack (FlashInfer sparse-MLA SM120, packed fp8 KV, 900k context).
-Numbers below use **their** `bench_decode.py` protocol, vendored unmodified
-as [scripts/bench_decode_miaai.py](scripts/bench_decode_miaai.py):
+serves the same model on the same hardware through a different engine.
+On their own benchmark protocol (vendored unmodified as
+[scripts/bench_decode_miaai.py](scripts/bench_decode_miaai.py)):
 
-| Protocol phase | This stack | MiaAI (their published) |
+| | This recipe | MiaAI (published) |
 |---|---:|---:|
-| Structured (count 1→200), tok/s | **72.4** | 61.7–62.9 |
-| — accept/step (of 7) | 6.86 | 6.43 |
-| Prose (hash-map), tok/s | **27.4** | 26.9 |
-| TTFT (short prompt) | **0.43–0.47 s** | ~0.72 s |
+| Structured output, tokens/s | 74.7 (74.1–76.5) | 61.7–62.9 |
+| Prose, tokens/s | 31.1 (30.7–32.0) | 26.9 |
+| First token | 0.43–0.46 s | ~0.72 s |
+| Attention memory at the same precision | +46% | — |
 
-> A best-on-each-stack comparison, not a single-variable controlled run —
-> different vLLM lineages and KV formats. The capacity metric that matters
-> is the KV pool at a given dtype, and at fp8 on the same hardware this
-> stack holds **1,435,070 tokens vs their 982,612** (+46%); max-model-len
-> is a knob bounded by that pool (their 900k config = 1.09 requests in
-> flight; this stack's 524k default is a choice that keeps 2.74). Add ~8×
-> larger prefill chunks and the deeper eval story. Both projects
-> independently converged on the same three hard fixes (drafter KV
-> grouping, mHC aux capture, non-causal draft attention) — see
-> [docs/COMPARISON.md](docs/COMPARISON.md).
+Both projects arrived at the same three essential fixes independently; the
+differences are in engine lineage, memory format, and how much context is
+kept available per request. Full analysis in
+[docs/COMPARISON.md](docs/COMPARISON.md).
 
-### Quality
+## How it works
 
-| Gate | fp8_e4m3 lane (shipped image) | GLM_NEXT b12x lane (ratified default) |
-|---|---|---|
-| math_500 n=100 | 87% (bf16 same-day A/B: 86) | **91%** |
-| gpqa_diamond n=50 (robust) | 72% (36/50) | 70% (35/50 — one question, noise) |
-| estonia (133,186-token retrieval, n=10, high) | 9/10 | **10/10, 0 errors** |
-| lavd ledger audit (n=30, high, EXACT/NEAR/FAIL) | 5/23/2 | **15/14/1** |
-| c1 prose decode / TTFT | 28.9 tok/s / 0.44–0.49 s | **31.2 tok/s / 0.38–0.41 s** |
-| structured decode | 74.6 tok/s | 71.5 (top run 74.5 — noise) |
-| deep prefill (cold, MNBT 8192) | ~1,400 tok/s @133k | **1,490 @133k; 1,277 @499k full bank (390.8 s, needle-exact)** |
-| Speculative equivalence | lossless up to argmax tie-flips ([tools/dflash_equiv.py](tools/dflash_equiv.py)) | accept 2.32–2.56/7 on c1 (vs 2.26) |
-| Tool + vision smokes | verified at temp 0 | verified at temp 0 |
+The two Sparks split the model between them (tensor parallel over the
+200GbE link). The 288-expert mixture-of-experts weights are served directly
+from a 4-bit trellis-quantized checkpoint, with only the parts a token
+actually routes to read from memory. A one-billion-parameter drafter
+([DFlash2](https://huggingface.co/incoai/GLM-5.3-Flash-DFlash2), installed as
+the [8-bit copy](https://huggingface.co/local-inference-lab/GLM-5.3-Flash-DFlash2-MXFP8)
+published by local-inference-lab, which accepts exactly as many tokens and
+runs a few percent faster) proposes
+blocks of tokens that the full model verifies in one pass. Attention memory
+is stored as compact 8-bit records so that half a million tokens of context
+fit, and the whole decode step is captured as CUDA graphs. The engine is a
+vLLM fork branch, [Entrpi/vllm-glm-5.3-flash-spark](https://github.com/Entrpi/vllm-glm-5.3-flash-spark),
+baked into the image `ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark`.
 
-The GLM_NEXT lane's lavd and math gains are consistent with its packed
-528 B/token records carrying **group-128 inline fp32 scales** — finer
-per-token quantization than fp8_e4m3's single per-layer scale.
+The engineering record, including what did not work, is
+[docs/FINDINGS.md](docs/FINDINGS.md); the image's exact provenance (base,
+commits, build command, patches) is [docs/BUILD.md](docs/BUILD.md).
 
-## Under the hood
-
-The engine is a vLLM fork branch ([Entrpi/vllm-glm-5.3-flash-spark](https://github.com/Entrpi/vllm-glm-5.3-flash-spark));
-everything below is baked into the image. Inherited from the
-local-inference-lab fork lineage: the b12x runtime, breakable CUDA graphs,
-kpool-compressed sparse attention. Introduced by this branch:
-
-| Area | What |
-|---|---|
-| glm5_next port | GLM-5.3-Flash architecture (PR #53906) re-expressed in the fork's KV-tensor dialect, + sm121 day-0 fixes |
-| EXL3 serving | generic tensor_storage reader + `standard_fused_moe` trellis fast path (load-time TP slicing of the standard checkpoint — no offline conversion) |
-| DFlash2 | 14-file transplant of upstream's DFlash2 lane onto the fork's V1 runner, incl. salted-Gumbel draft sampling and non-causal in-block attention |
-| mHC aux capture | EAGLE3-style hidden taps at layers (6,15,25,34,43) through the hyper-connection contract (`hc_post` + `hc_contract`), oracle-tested |
-| Draft KV grouping | drafter's sliding-window layers get their own KV groups inside the glm5 fast path (the generic path cannot serve this hybrid) |
-| Ring draft KV | fixed-size ring-backed draft KV: `1 + max_seqs × R` pages total + a positional remap kernel — recovers the pool DFlash2 otherwise costs (329k → 520k tokens) |
-| Chat template | multimodal template repair for text-only-template checkpoints + `enable_thinking` gating (reasoning never leaks into `content`) |
-| FlashInfer sm12x | fp8-MLA gate + `CTA_TILE_KV` cap patches (live-validated; required only for the fp8-KV option) |
-| Fine-grained prefix reuse (v2.1) | `--prefix-match-unit` below the 4608-token mamba block: ring-safe per-block CoW, draft-replay reserve + gap-aware restore guard, mamba eagle-backoff fix — every complete boundary state hittable (FINDINGS §16) |
-| Spec-state ring (v2.2) | DFlash2/MTP mamba scratch states move from pool blocks to per-slot ring pages carved from the MLA tensors (`spec_state_carveout` stamped on the mamba KV spec; scheduler layout ≡ drafterless; worker block-table splice + ring-aware fused state copies) — removes the ~25-block-per-request pool tax (§17) |
-| Fair mixed prefill (v2.2) | dynamic time-share gate (`--mixed-prefill-decode-weight`) composed with a sub-block chunk cap (`--mixed-prefill-token-cap`): the gate paces when a peer chunk runs, the cap sizes it, and the mamba-aligned splitter lets capped chunks advance sub-block (§17) |
-| State retention (v2.2) | hash-cached boundary states freed early mid-request are re-aged at retirement (LRU-young), so sub-prefix reuse degrades from the tail instead of zeroing under churn (§17) |
-| Indexer workspace (v2.2) | sparse-indexer prefill K-gather workspace bounded by the legal per-step maximum (MiaAI-Lab #86 credit) — ~2.5 GiB reclaimed per rank at 524k; fail-closed assert at the slice |
-| Census-derived knobs | `NCCL_MIN/MAX_NCHANNELS=8` default (37.7 MB prefill all-reduce −12%, decode-neutral); `VLLM_USE_B12X_FP8_GEMM=1` opt-in (b12x MXFP8 GEMM for the DFlash2 drafter: 7.7 → 3.2 ms/step, +4% tok/s at 1–2 streams, −8% at 4 streams from lower draft acceptance — FINDINGS §18) |
-
-80 unit tests covering the above run in the pulled image:
-[scripts/run_tests.sh](scripts/run_tests.sh).
-
-## Repo layout
+## Repository layout
 
 ```
 install.sh                      one-shot installer (run on the head)
-.env.example                    topology + knobs; copied to .env on first run
+.env.example                    topology and knobs; copied to .env on first run
 scripts/
-  launch-glm53-vllm-tp2.sh      per-box launcher (rank 0 = head, 1 = worker)
-  glm53-warmup.sh               post-boot JIT shape warmup
-  bench_glm53.py                c1/c5/TTFT bench (3-run medians)
+  launch-glm53-vllm-tp2.sh      per-box launcher (0 = head, 1 = worker)
+  glm53-warmup.sh               post-boot warm-up
+  bench_glm53.py                single-stream / 5-stream / first-token benchmark
+  bench_workloads.py            decode speed by workload: median, spread, acceptance
   bench_decode_miaai.py         MiaAI's protocol, vendored for comparability
-  saturation_bench.py           6x ~8.6k-prompt scheduler-pressure bench
-  longctx_smoke.py              112k-token prefill + accept probe
-  warm_prefix_test.py           prefix-cache + drafting interaction test
-  accept_ab_matrix.py           temp x thinking acceptance A/B
+  sweep_runner.py               concurrency sweep with identical content per arm
+  saturation_bench.py           scheduler-pressure benchmark
+  longctx_smoke.py              long-prompt processing + drafting probe
+  warm_prefix_test.py           repeated-turn reuse test
+  accept_ab_matrix.py           temperature × reasoning acceptance A/B
   check_image.sh                image self-containment verification
-  run_tests.sh                  80-test suite inside the pulled image
+  run_tests.sh                  unit tests inside the pulled image
 tools/
-  dflash_equiv.py               speculative-equivalence harness (rescoring)
-  memlog.sh                     1 Hz memory-floor sampler
+  dflash_equiv.py               speculative-decoding equivalence harness
+  memlog.sh                     memory-headroom sampler
 docs/
-  FINDINGS.md                   the full engineering story + negative results
-  COMPARISON.md                 cross-stack analysis vs the MiaAI recipe
-  BUILD.md                      image provenance: commits, args, base, patches
-  ANNOUNCEMENT.md               community publishing checklist disclosure
+  FINDINGS.md                   engineering record, measurements, negative results
+  COMPARISON.md                 cross-stack comparison with the MiaAI recipe
+  BUILD.md                      image provenance: commits, build args, patches
+  ANNOUNCEMENT.md               community publishing disclosure
 ```
 
-## Reproducing
+## Reproducing the numbers
 
 ```bash
-# throughput (run on or against the head)
-python3 scripts/bench_glm53.py 3
+python3 scripts/bench_glm53.py 3                                  # single/5-stream/TTFT, 3-run medians
+python3 scripts/bench_workloads.py 5 400                          # per-workload table: median, spread, acceptance
 python3 scripts/bench_decode_miaai.py --phase structured --structured --runs 5 --max-tokens 400 --skip-coherence
 python3 scripts/bench_decode_miaai.py --phase prose --runs 5 --max-tokens 400 --skip-coherence
-
-# acceptance + scheduler behavior
-python3 scripts/saturation_bench.py
-python3 scripts/longctx_smoke.py
-python3 scripts/warm_prefix_test.py
-
-# equivalence (spec-on vs spec-off, rescoring-control)
-python3 tools/dflash_equiv.py
-
-# unit tests + image verification (GPUs must be free — run before launch)
-bash scripts/run_tests.sh
-bash scripts/check_image.sh
+python3 scripts/sweep_runner.py --arm mine --cells 1,2,4          # concurrency table
+python3 scripts/longctx_smoke.py                                  # long-prompt processing
+python3 tools/dflash_equiv.py                                     # speculative equivalence
+bash scripts/run_tests.sh && bash scripts/check_image.sh          # GPUs must be free
 ```
 
-Quality numbers (math_500 / gpqa_diamond) were produced with a local
-harness: greedy decoding, robust answer extraction (never first-line
-grading), n=50–100 per gate; methodology in
+Quality gates (math_500, GPQA-diamond) used a local harness with greedy
+decoding and robust answer extraction, n = 50–100 per gate; methodology in
 [docs/FINDINGS.md](docs/FINDINGS.md).
 
 ## Related work
 
 | Project | Role |
 |---|---|
-| [MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks](https://github.com/MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks) | parallel recipe, different stack; 900k context; benchmark protocol vendored here |
-| [local-inference-lab/vllm](https://github.com/local-inference-lab/vllm) | the fork lineage this branch builds on |
-| [tpurtell/sparkinfer-glmrt](https://github.com/tpurtell/sparkinfer-glmrt) | b12x trellis runtime (the fused-MoE contract this stack serves through) |
-| [turboderp-org/exllamav3](https://github.com/turboderp-org/exllamav3) | EXL3 format + kernels |
-| tonyd2wild / jack6464 (NVIDIA forums) | the original GLM-5.3-Flash-on-Spark NVFP4 recipes this project started from |
-| [Entrpi/qwen3.5-122B-A10B-on-spark](https://github.com/Entrpi/qwen3.5-122B-A10B-on-spark) | sibling single-Spark recipe (DFlash1) |
+| [MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks](https://github.com/MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks) | parallel recipe on a different engine; benchmark protocol vendored here |
+| [local-inference-lab/vllm](https://github.com/local-inference-lab/vllm) | the vLLM fork lineage this engine builds on |
+| [tpurtell/sparkinfer-glmrt](https://github.com/tpurtell/sparkinfer-glmrt) | the b12x GPU runtime the fused expert kernels come from |
+| [turboderp-org/exllamav3](https://github.com/turboderp-org/exllamav3) | the EXL3 4-bit format and kernels |
+| [brandonmusic/GLM-5.3-Flash-tr3-4bpw](https://huggingface.co/brandonmusic/GLM-5.3-Flash-tr3-4bpw) | the 4-bit checkpoint served here |
+| [local-inference-lab/GLM-5.3-Flash-DFlash2-MXFP8](https://huggingface.co/local-inference-lab/GLM-5.3-Flash-DFlash2-MXFP8) | the drafter as installed: an 8-bit copy of IncoAI's DFlash2 (CC BY-NC-ND 4.0; downloaded from its source, never redistributed here) |
+| [incoai/GLM-5.3-Flash-DFlash2](https://huggingface.co/incoai/GLM-5.3-Flash-DFlash2) | the original 16-bit drafter (same license); `DFLASH_REPO=incoai/GLM-5.3-Flash-DFlash2 DFLASH_DIR=$HOME/models/glm53-dflash2` installs it instead |
+| [Entrpi/qwen3.5-122B-A10B-on-spark](https://github.com/Entrpi/qwen3.5-122B-A10B-on-spark) | sibling single-Spark recipe |
 | [Entrpi/dgx-spark-serving-mode](https://github.com/Entrpi/dgx-spark-serving-mode) | reclaim desktop-held unified memory before serving |
 
 ## Acknowledgements
 
-- **brandonmusic** — the EXL3/TR3 4bpw quant this whole recipe serves
+- **brandonmusic** — the 4-bit quant this recipe serves
 - **IncoAI** — the DFlash2 drafter
+- **local-inference-lab** — the 8-bit (MXFP8) drafter copy and the NVFP4 model conversions
 - **eugr** — the `spark-vllm-docker` build system the image is built with
-- **Mia's AI Lab** — the parallel recipe, the benchmark protocol, and the
-  checkpoint mirror; several operational ideas here (JIT cache persistence,
-  boot warmup, thinking-off template handling) were carried over from it
-- **tonyd2wild, jack6464, malaiwah** — forum groundwork and the KLD panel
+- **Mia's AI Lab** — the parallel recipe, the benchmark protocol, the checkpoint mirror, and several operational ideas carried over from it
+- **tonyd2wild, jack6464, malaiwah** — forum groundwork and the quality panel
 - **local-inference-lab, tpurtell, turboderp** — the runtimes underneath
 
 ## License
 
 This repository (installer, scripts, docs) is MIT. The vLLM branch inherits
-Apache-2.0. Model and drafter weights keep their upstream licenses — note
-the DFlash2 drafter is **CC BY-NC-ND 4.0** (research/eval): the installer
+Apache-2.0. Model and drafter weights keep their upstream licenses; the
+DFlash2 drafter is **CC BY-NC-ND 4.0** (research/eval), so the installer
 downloads it from its source repository and this project never redistributes
 it.

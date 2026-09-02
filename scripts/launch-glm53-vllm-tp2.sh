@@ -47,13 +47,13 @@ MPORT="${MPORT:-29521}"
 #   fast rail. The drop-caches ritual below is still required.
 WEIGHTS_MODE="${WEIGHTS_MODE:-local}"
 MODEL_HOST_PATH="${MODEL_HOST_PATH:-$HOME/models/glm53-exl3}"
-DFLASH_DIR="${DFLASH_DIR:-$HOME/models/glm53-dflash2}"
+DFLASH_DIR="${DFLASH_DIR:-$HOME/models/glm53-dflash2-mxfp8}"
 NFS_PORT="${NFS_PORT:-12049}"                    # worker's NFS export port (nfs mode)
 VOL_NAME="${VOL_NAME:-exl3weights}"
 MODEL_PATH="/models/glm53-exl3"
 
 # ---- serving knobs (defaults = the validated production configuration) -----
-IMAGE="${IMAGE:-ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v2.2-ring}"
+IMAGE="${IMAGE:-ghcr.io/entrpi/glm-5.3-flash-exl3-2x-spark:v2.3-tier1}"
 NAME="${NAME:-vllm_glm53}"
 MAX_LEN="${MAX_LEN:-524288}"             # 500k default bank (2026-08-29);
                                          # 131072 was the pre-long-context
@@ -212,16 +212,23 @@ EXTRA_ENVS=()
 # EXL3 loader override: VLLM_EXL3_STANDARD_FUSED=0 falls back to the
 # per-expert parity load path (slow load, ~6 tok/s decode — debugging only).
 [[ -n "${VLLM_EXL3_STANDARD_FUSED:-}" ]] && EXTRA_ENVS+=(-e "VLLM_EXL3_STANDARD_FUSED=$VLLM_EXL3_STANDARD_FUSED")
-# Opt-in b12x MXFP8 GEMM for the DFlash2 drafter (FINDINGS §18): -4.5 ms/step
-# and +4% tok/s at 1-2 streams, but -0.19 accept / -8% tok/s at 4 streams
-# (M=32 rows takes a different b12x tile path). Off until the per-M dispatch
-# lands; VLLM_USE_B12X_FP8_GEMM=1 turns it on.
-[[ -n "${VLLM_USE_B12X_FP8_GEMM:-}" ]] && EXTRA_ENVS+=(-e "VLLM_USE_B12X_FP8_GEMM=$VLLM_USE_B12X_FP8_GEMM")
-# Row-count ceiling for that GEMM (v2.3 images: rows above it fall back to
-# the FlashInfer kernel; default 16) and the opt-in rowwise-fp8 draft head
-# (v2.3 images; -1 ms/step, +317 MB per rank, draft-time only).
+# v2.3 drafter defaults (FINDINGS §18-19): b12x MXFP8 GEMM for the DFlash2
+# drafter with the per-M FlashInfer fallback (rows > VLLM_B12X_MXFP8_MAX_M,
+# default 16), and the rowwise-fp8 draft head (-1 ms/step, +317 MB/rank,
+# draft-time only). Set VLLM_USE_B12X_FP8_GEMM=0 / VLLM_DFLASH_FP8_DRAFT_HEAD=0
+# to turn either off; on pre-v2.3 images set VLLM_USE_B12X_FP8_GEMM=0 (they
+# have no per-M fallback and lose acceptance at 4 streams).
+B12X_FP8_GEMM="${VLLM_USE_B12X_FP8_GEMM:-1}"
+DFLASH_FP8_HEAD="${VLLM_DFLASH_FP8_DRAFT_HEAD:-1}"
+EXTRA_ENVS+=(-e "VLLM_USE_B12X_FP8_GEMM=$B12X_FP8_GEMM" -e "VLLM_DFLASH_FP8_DRAFT_HEAD=$DFLASH_FP8_HEAD")
 [[ -n "${VLLM_B12X_MXFP8_MAX_M:-}" ]] && EXTRA_ENVS+=(-e "VLLM_B12X_MXFP8_MAX_M=$VLLM_B12X_MXFP8_MAX_M")
-[[ -n "${VLLM_DFLASH_FP8_DRAFT_HEAD:-}" ]] && EXTRA_ENVS+=(-e "VLLM_DFLASH_FP8_DRAFT_HEAD=$VLLM_DFLASH_FP8_DRAFT_HEAD")
+# NCCL channel count for the TP2 all-reduces (v2.3 default 8, fixed min=max).
+# NCCL_NCHANNELS=0 leaves NCCL's own choice (the v2.2 behaviour).
+NCCL_NCHANNELS="${NCCL_NCHANNELS:-8}"
+NCCL_CHANNEL_ENVS=()
+if [[ "$NCCL_NCHANNELS" != "0" && -n "$NCCL_NCHANNELS" ]]; then
+  NCCL_CHANNEL_ENVS=(-e "NCCL_MIN_NCHANNELS=$NCCL_NCHANNELS" -e "NCCL_MAX_NCHANNELS=$NCCL_NCHANNELS")
+fi
 if [[ "$WEIGHTS_MODE" == "local" || "$NODE_RANK" == "1" ]]; then
   test -f "$MODEL_HOST_PATH/config.json" || {
     echo "EXL3 weights not found at $MODEL_HOST_PATH (run install.sh, or set MODEL_HOST_PATH)" >&2
@@ -256,6 +263,29 @@ KDA_ARGS=()
 # fatal-absent on v2 and earlier. Explicit-empty (PREFIX_MATCH_UNIT=) restores
 # the coarse 4608 engine default.
 PREFIX_MATCH_UNIT="${PREFIX_MATCH_UNIT-512}"
+# Old-image guard: v1-dflash2 and v2-glmnext engines predate fine-grained
+# prefix reuse (any unit below the 4608-token block asserts in
+# copy_kv_cache_blocks_inplace on the first request) and the 14.4 GB KV
+# default (their indexer workspace is not right-sized). Refuse the
+# combination instead of booting into a crash; the fixes are to drop the
+# IMAGE pin (current release) or to set PREFIX_MATCH_UNIT= and
+# KV_CACHE_MEMORY=12400000000 for the old image.
+if [[ "$IMAGE" == *:v1-dflash2* || "$IMAGE" == *:v2-glmnext* ]]; then
+  if [[ -n "$PREFIX_MATCH_UNIT" && "$PREFIX_MATCH_UNIT" -lt 4608 ]]; then
+    echo "error: image $IMAGE predates fine-grained prefix reuse; PREFIX_MATCH_UNIT=$PREFIX_MATCH_UNIT would assert at the first request." >&2
+    echo "       Either unset IMAGE in .env (use the current release) or set PREFIX_MATCH_UNIT= (coarse) and KV_CACHE_MEMORY=12400000000 for this image." >&2
+    exit 2
+  fi
+  if [[ "${KV_CACHE_MEMORY:-}" == "" || "$KV_CACHE_MEMORY" -gt 12400000000 ]]; then
+    echo "warning: image $IMAGE was validated with KV_CACHE_MEMORY=12400000000; using that instead of the 14.4 GB default." >&2
+    KV_CACHE_MEMORY=12400000000
+  fi
+elif [[ -n "${GLM53_TOPK_FIX_SO:-}" ]]; then
+  # The persistent_topk retry is baked since v2-glmnext; a v1-era topk_fix.so
+  # would be loaded over the image's own op (and can fail the first decode).
+  echo "warning: GLM53_TOPK_FIX_SO is set but the fix is baked into $IMAGE; ignoring the v1-era override." >&2
+  unset GLM53_TOPK_FIX_SO
+fi
 [[ -n "$PREFIX_MATCH_UNIT" ]] && KDA_ARGS+=(--prefix-match-unit "$PREFIX_MATCH_UNIT")
 # Mixed-prefill decode floor: while anything is decoding, skip (-1) or cap
 # (N tokens) peer prefill chunks; solo prefills keep full MNBT chunks.
@@ -329,6 +359,15 @@ B12X_HOTFIX_DIR="$HOME/glm53-hotfix-b12x"
 if [[ -d "$B12X_HOTFIX_DIR" ]]; then
   EXTRA_VOLS+=(-v "$B12X_HOTFIX_DIR:/usr/local/lib/python3.12/dist-packages/b12x:ro")
 fi
+# Overlays are debugging aids that were needed on v1-dflash2 only. Left over
+# from an old install they silently shadow the current image's code, so say
+# so loudly every launch (the installer refuses to upgrade over them).
+_overlay_n=$(( $(find "$HOTFIX_DIR" "$FI_HOTFIX_DIR" -type f 2>/dev/null | wc -l) + $( [[ -d "$B12X_HOTFIX_DIR" ]] && echo 1 || echo 0) ))
+if (( _overlay_n > 0 )); then
+  echo "WARNING: $_overlay_n hotfix overlay file(s)/tree(s) from \$HOME/glm53-hotfix* are bound over $IMAGE." >&2
+  echo "         If they are not a deliberate current-image debugging overlay, move them aside:" >&2
+  echo "         mv ~/glm53-hotfix ~/glm53-hotfix.retired-\$(date +%F) (same for -fi / -b12x) and relaunch." >&2
+fi
 
 # Persist JIT compile caches (Triton, FlashInfer, b12x CuTeDSL, vLLM
 # torch.compile) across container recreates — hash-keyed, so stale entries
@@ -337,6 +376,37 @@ mkdir -p "$CACHE_HOST_PATH" \
   "$CACHE_HOST_PATH/jit/triton" "$CACHE_HOST_PATH/jit/flashinfer" \
   "$CACHE_HOST_PATH/jit/b12x" "$CACHE_HOST_PATH/jit/vllm"
 docker rm -f "$NAME" 2>/dev/null || true
+
+# Memory preflight. The defaults (KV 14.4 GB, GMU 0.85) were validated on
+# lightly loaded headless boxes with < 6 GB of system memory in use before
+# launch; GB10 unified memory swap-wedges rather than failing cleanly when
+# that headroom is gone. Refuse to launch above MEM_USED_MAX_GB (default 6)
+# and name the consumers; MEM_USED_MAX_GB=0 disables the check.
+MEM_USED_MAX_GB="${MEM_USED_MAX_GB:-6}"
+if [[ "$MEM_USED_MAX_GB" != "0" ]]; then
+  # A just-removed serving container (~110 GB) takes several seconds to hand
+  # its memory back; poll the free(1) "used" column (total - free -
+  # buffers/cache) for up to 60 s before judging.
+  _used_mb=0
+  # Memory from a container that was just removed is returned over tens of
+  # seconds; poll for up to 120 s before deciding.
+  for _i in $(seq 1 60); do
+    _used_mb=$(free -m | awk 'NR==2{print $3}')
+    (( _used_mb <= MEM_USED_MAX_GB * 1024 )) && break
+    sleep 2
+  done
+  if (( _used_mb > MEM_USED_MAX_GB * 1024 )); then
+    echo "error: $((_used_mb/1024)).$(( (_used_mb%1024)*10/1024 )) GB of system memory is in use before launch (limit ${MEM_USED_MAX_GB} GB)." >&2
+    echo "       The validated memory defaults assume a lightly loaded box. Stop other services" >&2
+    echo "       (a docker pull/load or a desktop session in progress inflates this number)," >&2
+    echo "       lower KV_CACHE_MEMORY (~90k pool tokens per GB), or raise/disable the check:" >&2
+    echo "       MEM_USED_MAX_GB=<gb> ./launch-glm53-vllm-tp2.sh $NODE_RANK   (0 = skip)" >&2
+    echo "       top consumers:" >&2
+    ps -eo rss,comm --sort=-rss | awk 'NR>1 && NR<=7 {printf "         %6d MB  %s\n", $1/1024, $2}' >&2
+    exit 2
+  fi
+  echo "memory preflight: $((_used_mb/1024)) GB in use (limit ${MEM_USED_MAX_GB} GB) — ok"
+fi
 
 # GB10 pre-launch ritual — a hot page cache at model-load time wedges the box
 # into swap (unified-memory starvation). Root via privileged docker; falls
@@ -374,7 +444,7 @@ docker run --gpus all -d \
   -e NCCL_NVLS_ENABLE=0 -e NCCL_CROSS_NIC=0 -e NCCL_IB_MERGE_NICS=0 \
   -e NCCL_CUMEM_ENABLE=0 -e NCCL_IGNORE_CPU_AFFINITY=1 -e NCCL_DEBUG=WARN \
   -e TORCH_NCCL_ASYNC_ERROR_HANDLING=1 \
-  -e NCCL_MIN_NCHANNELS=8 -e NCCL_MAX_NCHANNELS=8 \
+  "${NCCL_CHANNEL_ENVS[@]}" \
   "$IMAGE" \
     vllm serve "$MODEL_PATH" \
     --served-model-name glm-5.3-flash \
