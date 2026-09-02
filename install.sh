@@ -88,12 +88,12 @@ SERVE_KNOBS=(MPORT MAX_LEN SPEC MTP DFLASH_TOKENS EAGER SKIP_MM_PROFILING
 KIT_VERSION=$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo unknown)
 GLM53_UPDATE_URL="${GLM53_UPDATE_URL:-https://raw.githubusercontent.com/Entrpi/glm-5.3-flash-exl3-2x-spark/main/LATEST}"
 
-SKIP_PULL=0 SKIP_DOWNLOAD=0 NO_START=0 FORCE=0 PRUNE_OLD=0 YES=0 ROLLBACK=0 NO_ROLLBACK=0 REMOVE_OLD=0 KEEP_OLD=0
+SKIP_PULL=0 SKIP_DOWNLOAD=0 NO_START=0 FORCE=0 PRUNE_OLD=0 YES=0 ROLLBACK=0 NO_ROLLBACK=0 REMOVE_OLD=0 KEEP_OLD=0 CLEANUP=0
 usage() {
   cat <<'EOF'
 Usage: ./install.sh [--nfs|--local-both] [--skip-pull] [--skip-download]
                     [--no-start] [--yes] [--remove-old|--keep-old|--prune-old-images]
-                    [--no-rollback] [--force] [--rollback] [--version] [--check-update] [--help]
+                    [--no-rollback] [--force] [--rollback] [--cleanup] [--version] [--check-update] [--help]
 
   --nfs           weights only on the worker, NFS-exported to the head
                   (the reference kit's validated-production topology)
@@ -114,6 +114,8 @@ Usage: ./install.sh [--nfs|--local-both] [--skip-pull] [--skip-download]
   --no-rollback   if the new release fails to start, leave its containers running for
                   debugging instead of restoring the previous release
   --rollback      restore the previous release (files saved by the last upgrade) and relaunch
+  --cleanup       only list the leftovers of earlier releases and offer to remove them
+                  (nothing is relaunched; combine with --remove-old / --keep-old)
   --version       print this kit's release and what the boxes have installed
   --check-update  compare this checkout with the published release list (LATEST)
 
@@ -137,6 +139,7 @@ for arg in "$@"; do
     --yes|-y) YES=1 ;;
     --no-rollback) NO_ROLLBACK=1 ;;
     --rollback) ROLLBACK=1 ;;
+    --cleanup) CLEANUP=1 ;;
     --remove-old) REMOVE_OLD=1 ;;
     --keep-old) KEEP_OLD=1 ;;
     --version) echo "kit $KIT_VERSION ($(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo 'no git'))"; [ -f "$HOME/.glm53-kit-release" ] && sed 's/^/  installed: /' "$HOME/.glm53-kit-release" | grep -E "KIT_(IMAGE|DATE|COMMIT)"; exit 0 ;;
@@ -440,7 +443,7 @@ offer_cleanup() {
   elif [ "$PRUNE_OLD" = 1 ]; then do_rm=1; do_dfl=0
   elif [ "$KEEP_OLD" = 1 ]; then do_rm=0
   else
-    ask_tty "Remove them now that ${IMAGE##*:} passed its smoke test? [y/N] "
+    ask_tty "Remove them? (${IMAGE##*:} is the release in use) [y/N] "
     case $? in 0) do_rm=1 ;; 1) do_rm=0 ;; 2) log "no terminal attached: keeping them (re-run with --remove-old to reclaim the space)"; return 0 ;; esac
   fi
   if [ "$do_rm" = 0 ]; then log "keeping them (./install.sh --remove-old reclaims the space later)"; return 0; fi
@@ -747,6 +750,11 @@ start_server() {
 
 if [ "$ROLLBACK" = 1 ]; then
   rollback || die "rollback failed"
+  exit 0
+fi
+if [ "$CLEANUP" = 1 ]; then
+  WSSH true || die "passwordless SSH to $WORKER failed"
+  offer_cleanup
   exit 0
 fi
 lint_env
