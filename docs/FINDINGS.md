@@ -601,6 +601,65 @@ puts warm-hit floors on a 512 grid (tail-hit probe 6,912 → 7,168 and
 prefill 1,658 tok/s, the best recorded), accepts 7.65–7.76/8. Default
 since v2.2; the 2048-token draft reserve of §16 still applies.
 
+## 18. Kernel census and two env-only wins (2026-09-02)
+
+A torch-profiler census of the v2.2-ring production configuration (one
+request, both ranks, units delimited by the runner's annotations) priced
+every kernel family in the 8-row verify step (118 ms GPU: dense bf16
+GEMM 39%, trellis MoE 37.5%, drafter 6.8%, NCCL 5%) and the 4,608-token
+prefill chunk (2,882 ms: MoE 34%, dense GEMM 20%, NCCL 10.6%, sparse MLA
+9%, mHC 10%). Two env-only levers came out of the follow-up A/B window
+(production down, peer box idle, same content per arm); one became a
+launcher default, the other an opt-in knob:
+
+**b12x for the drafter's MXFP8 GEMMs** (`VLLM_USE_B12X_FP8_GEMM=1`,
+opt-in). The DFlash2 drafter's 32 MXFP8 GEMMs per step ran through
+FlashInfer's `DeviceGemmMxfp8GemmSm120` at ~65 GB/s effective for M=8
+(7.6 ms/step). The fork's MXFP8 kernel list already ranks
+`B12xMxfp8LinearKernel` first but gates it behind this env; with it on,
+the same 32 launches take 3.1 ms (drafter family 7.7 → 3.2 ms/step,
+prefill draft 51 → 21 ms/chunk) and nothing else in the step moves.
+Only the drafter uses MXFP8, so target numerics are untouched — but
+draft numerics are not: in the same-content acceptance arm
+(`sweep_runner --arm t0ab`, 16k contexts, 60 s windows) the b12x head
+kept acceptance at 1–2 streams (2.40/2.49 vs 2.42/2.47 accepted per
+draft, +4% tok/s from the faster step) and lost it at 4 streams (2.40 ±
+0.06 over three runs vs 2.59 ± 0.06 for FlashInfer over four; −8% tok/s
+at equal step rate). At 4 streams the drafter GEMMs run M=32 rows, past
+b12x's `m <= 8` decode policy, on a different tile path. Until a per-M
+dispatch (b12x below ~16 rows, FlashInfer above) lands, the knob stays
+off by default.
+
+**Eight fixed NCCL channels** (`NCCL_MIN_NCHANNELS=8
+NCCL_MAX_NCHANNELS=8`, launcher default). An all-reduce microbench in the serving image
+(two ranks over the 200 GbE rail, launcher transport env) put the
+default channel selection at 3.38 ms for the 37.7 MB prefill
+all-reduce (11 GB/s), 616 µs at 1 MB and 52 µs at 64 KB. Pinning 8
+channels gives 2.96 ms / 160–210 µs / 44–59 µs; 4 channels is a hair
+better at 37.7 MB but worse at 8 MB and jittery at 64 KB; QPs per
+connection, `NCCL_NCHANNELS_PER_NET_PEER`, `NCCL_BUFFSIZE`, LL128 and
+Simple all lose. In-serve: prefill all-reduce 306 → 286 ms/chunk,
+decode 6.2 → 5.5 ms/step.
+
+Combined receipt (same boot, both knobs): verify step 118.1 → 111.2 ms
+kernel time (−5.2 ms attributable), 131k prefill 82.7 → 81.5 s; the
+channel default alone is decode-neutral (step rate 8.66 → 8.66/s at one
+stream) and worth ~20 ms per prefill chunk. Rejected in the
+same window: `MNBT=9216` (the mamba block alignment keeps prefill
+forwards at 4,608 tokens, so the larger workspace only costs: +3% GPU,
+92 s wall). Blocked: GPU Direct RDMA over RoCE — every GDR knob reports
+`GPU Direct RDMA Disabled` because the image's `libmlx5` lacks
+`mlx5dv_reg_dmabuf_mr` and no `nvidia-peermem` is loaded, so 37.7 MB
+traffic bounces through host buffers at ~100 Gb/s of the 200 Gb/s link;
+a newer rdma-core in the image is the next NCCL lever.
+
+Also measured: the head box runs at 0.5–1.5 GB of available host memory
+with the model loaded (gmu 0.85 + 14.4 GB KV). One census was
+confounded by memory pressure (NVRM `NV_ERR_NO_MEMORY` in dmesg,
+alternating 2× chunk slowdowns per rank); GPU clocks stayed at 2,424
+MHz with no throttle flags. If a deployment adds anything to the head,
+take the KV budget down a notch (13.4 GB) first.
+
 ## Production recommendation
 
 Serve the GLM_NEXT lane (ratified default 2026-08-30):

@@ -293,6 +293,7 @@ kpool-compressed sparse attention. Introduced by this branch:
 | Fair mixed prefill (v2.2) | dynamic time-share gate (`--mixed-prefill-decode-weight`) composed with a sub-block chunk cap (`--mixed-prefill-token-cap`): the gate paces when a peer chunk runs, the cap sizes it, and the mamba-aligned splitter lets capped chunks advance sub-block (§17) |
 | State retention (v2.2) | hash-cached boundary states freed early mid-request are re-aged at retirement (LRU-young), so sub-prefix reuse degrades from the tail instead of zeroing under churn (§17) |
 | Indexer workspace (v2.2) | sparse-indexer prefill K-gather workspace bounded by the legal per-step maximum (MiaAI-Lab #86 credit) — ~2.5 GiB reclaimed per rank at 524k; fail-closed assert at the slice |
+| Census-derived knobs | `NCCL_MIN/MAX_NCHANNELS=8` default (37.7 MB prefill all-reduce −12%, decode-neutral); `VLLM_USE_B12X_FP8_GEMM=1` opt-in (b12x MXFP8 GEMM for the DFlash2 drafter: 7.7 → 3.2 ms/step, +4% tok/s at 1–2 streams, −8% at 4 streams from lower draft acceptance — FINDINGS §18) |
 
 80 unit tests covering the above run in the pulled image:
 [scripts/run_tests.sh](scripts/run_tests.sh).

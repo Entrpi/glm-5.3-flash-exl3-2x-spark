@@ -212,6 +212,11 @@ EXTRA_ENVS=()
 # EXL3 loader override: VLLM_EXL3_STANDARD_FUSED=0 falls back to the
 # per-expert parity load path (slow load, ~6 tok/s decode — debugging only).
 [[ -n "${VLLM_EXL3_STANDARD_FUSED:-}" ]] && EXTRA_ENVS+=(-e "VLLM_EXL3_STANDARD_FUSED=$VLLM_EXL3_STANDARD_FUSED")
+# Opt-in b12x MXFP8 GEMM for the DFlash2 drafter (FINDINGS §18): -4.5 ms/step
+# and +4% tok/s at 1-2 streams, but -0.19 accept / -8% tok/s at 4 streams
+# (M=32 rows takes a different b12x tile path). Off until the per-M dispatch
+# lands; VLLM_USE_B12X_FP8_GEMM=1 turns it on.
+[[ -n "${VLLM_USE_B12X_FP8_GEMM:-}" ]] && EXTRA_ENVS+=(-e "VLLM_USE_B12X_FP8_GEMM=$VLLM_USE_B12X_FP8_GEMM")
 if [[ "$WEIGHTS_MODE" == "local" || "$NODE_RANK" == "1" ]]; then
   test -f "$MODEL_HOST_PATH/config.json" || {
     echo "EXL3 weights not found at $MODEL_HOST_PATH (run install.sh, or set MODEL_HOST_PATH)" >&2
@@ -364,6 +369,7 @@ docker run --gpus all -d \
   -e NCCL_NVLS_ENABLE=0 -e NCCL_CROSS_NIC=0 -e NCCL_IB_MERGE_NICS=0 \
   -e NCCL_CUMEM_ENABLE=0 -e NCCL_IGNORE_CPU_AFFINITY=1 -e NCCL_DEBUG=WARN \
   -e TORCH_NCCL_ASYNC_ERROR_HANDLING=1 \
+  -e NCCL_MIN_NCHANNELS=8 -e NCCL_MAX_NCHANNELS=8 \
   "$IMAGE" \
     vllm serve "$MODEL_PATH" \
     --served-model-name glm-5.3-flash \
