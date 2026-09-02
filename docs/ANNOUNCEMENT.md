@@ -70,7 +70,7 @@ and the agentic profile (`MAX_SEQS` 12–16, `SPEC=none`,
 (`scripts/check_image.sh`) and 87/87 unit tests in the pulled image
 (`scripts/run_tests.sh`, incl. the per-M dispatch and fp8-head top-k
 parity tests); on the shipping default: math_500 91% (n=100) and
-MATH500_TBD of 50 on the v2.3 bake run, gpqa_diamond 70% (n=50), estonia
+46 of 50 (92%) on the shipping v2.3 boot with the MXFP8 drafter, gpqa_diamond 70% (n=50), estonia
 133k retrieval 10/10, lavd ledger audit 15/30 EXACT; speculative
 equivalence lossless-up-to-ties (`tools/dflash_equiv.py`); same-content
 concurrency arm on the v2.3 boot (16k contexts, 60 s windows, `MAX_SEQS=10`):
